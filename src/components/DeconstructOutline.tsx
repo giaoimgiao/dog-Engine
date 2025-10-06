@@ -15,21 +15,16 @@ import {
 } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { deconstructOutline } from '@/ai/flows/refine-chapter-with-world-info';
 import { Edit, Loader2, WandSparkles, Send, Users } from 'lucide-react';
 import type { BookstoreBookDetail, BookstoreChapterContent, CommunityPrompt } from '@/lib/types';
 import { ScrollArea } from './ui/scroll-area';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
-import { 
-    generateContent, 
-    listGeminiModels, 
-    hasApiKey, 
-    getDefaultModel,
-    type GeminiModel 
-} from '@/lib/gemini-client';
-import { GeminiSettings } from './GeminiSettings';
 import { getPrompts } from '@/lib/actions/community';
+import { useAI } from '@/hooks/useAI';
+import { useAIConfig } from '@/hooks/useAIConfig';
+import ModelSelector from './ModelSelector';
+import { AIProviderSettings } from './AIProviderSettings';
 
 interface DeconstructOutlineProps {
   bookDetailUrl: string;
@@ -48,6 +43,10 @@ export function DeconstructOutline({ bookDetailUrl, sourceId }: DeconstructOutli
   const [isGenerating, setIsGenerating] = useState(false);
   const [outline, setOutline] = useState<string>('');
 
+  // 使用统一AI配置和调用
+  const { selectedProviderId, selectedModelId, setSelectedProvider, setSelectedModel } = useAIConfig();
+  const { generateContent: aiGenerateContent, canGenerate } = useAI();
+
   // 用户自定义提示相关
   const DEFAULT_PERSONA = `你是一个专业的网络小说写作分析师，擅长从完整章节中提取写作细纲。\n请提供详细、结构化的细纲，帮助作者理解章节的写作手法。`;
   const DEFAULT_PROMPT_TEMPLATE = `请分析以下章节内容，提取出详细的写作细纲。包括：\n1. 主要情节发展\n2. 关键人物动作和对话\n3. 场景描写要点\n4. 情绪氛围营造\n5. 冲突和转折点`;
@@ -62,9 +61,6 @@ export function DeconstructOutline({ bookDetailUrl, sourceId }: DeconstructOutli
   const [communityPrompts, setCommunityPrompts] = useState<CommunityPrompt[]>([]);
   const [isCommunityPromptsLoading, setIsCommunityPromptsLoading] = useState<boolean>(false);
 
-  const [availableModels, setAvailableModels] = useState<GeminiModel[]>([]);
-  const [isModelListLoading, setIsModelListLoading] = useState(true);
-  const [selectedModel, setSelectedModel] = useState('');
   const [maxTokens, setMaxTokens] = useState<number>(() => {
     if (typeof window === 'undefined') return 2048;
     const saved = localStorage.getItem('deconstruct-max-tokens');
@@ -95,41 +91,6 @@ export function DeconstructOutline({ bookDetailUrl, sourceId }: DeconstructOutli
         }
       }
 
-      // Fetch models if not already fetched - 使用前端API
-      if (availableModels.length === 0) {
-        setIsModelListLoading(true);
-         try {
-            if (hasApiKey()) {
-              const models = await listGeminiModels();
-              setAvailableModels(models);
-              const flashModel = models.find(m => m.id.includes('gemini-2.5-flash') || m.id.includes('2.5-flash'));
-              if (flashModel) {
-                setSelectedModel(flashModel.id);
-              } else if (models.length > 0) {
-                setSelectedModel(models[0].id);
-              }
-            } else {
-              // 未配置API密钥时使用默认列表
-              const defaultModels: GeminiModel[] = [
-                { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
-                { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
-              ];
-              setAvailableModels(defaultModels);
-              setSelectedModel(getDefaultModel());
-            }
-        } catch (error) {
-            console.error("Failed to fetch models:", error);
-            toast({
-                title: '模型列表加载失败',
-                description: '无法从API获取语言模型列表，将使用默认模型。',
-                variant: 'destructive',
-            });
-             setSelectedModel(getDefaultModel());
-        } finally {
-            setIsModelListLoading(false);
-        }
-      }
-
       // 加载社区提示词
       try {
         setIsCommunityPromptsLoading(true);
@@ -142,7 +103,7 @@ export function DeconstructOutline({ bookDetailUrl, sourceId }: DeconstructOutli
       }
     }
     fetchInitialData();
-  }, [isOpen, bookDetail, bookDetailUrl, sourceId, availableModels.length, toast]);
+  }, [isOpen, bookDetail, bookDetailUrl, sourceId, toast]);
   
   const handleGenerate = async () => {
     if (!selectedChapterUrl) {
@@ -150,11 +111,11 @@ export function DeconstructOutline({ bookDetailUrl, sourceId }: DeconstructOutli
       return;
     }
 
-    if (!hasApiKey()) {
-      toast({ 
-        title: '请先配置API密钥', 
-        description: '请点击右上角AI设置按钮配置您的Gemini API密钥',
-        variant: 'destructive' 
+    if (!canGenerate) {
+      toast({
+        title: '请先配置AI提供商',
+        description: '请点击右上角AI设置按钮配置您的AI提供商',
+        variant: 'destructive'
       });
       return;
     }
@@ -176,15 +137,11 @@ export function DeconstructOutline({ bookDetailUrl, sourceId }: DeconstructOutli
         const prompt = `${promptTemplate}\n\n章节内容：\n${chapterContent.content}`;
         const systemInstruction = persona;
 
-        const result = await generateContent(
-          selectedModel,
-          prompt,
-          {
-            temperature: 0.3, // 低温度保证分析准确性
-            maxOutputTokens: maxTokens,
-            systemInstruction,
-          }
-        );
+        const result = await aiGenerateContent(prompt, {
+          temperature: 0.3, // 低温度保证分析准确性
+          maxOutputTokens: maxTokens,
+          systemInstruction,
+        });
         
         setOutline(result);
         
@@ -240,7 +197,7 @@ export function DeconstructOutline({ bookDetailUrl, sourceId }: DeconstructOutli
             <div className="flex items-center gap-2">
               <WandSparkles/> 拆解细纲
             </div>
-            <GeminiSettings variant="ghost" showStatus={true} />
+            <AIProviderSettings variant="ghost" showStatus={true} />
           </DialogTitle>
           <DialogDescription>
             选择一个章节，AI将为你提炼核心剧情脉络。
@@ -267,28 +224,26 @@ export function DeconstructOutline({ bookDetailUrl, sourceId }: DeconstructOutli
                     </Select>
                   </div>
                    <div>
-                    <Label htmlFor='model-select'>语言模型</Label>
-                    <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isModelListLoading}>
-                        <SelectTrigger id='model-select'>
-                            <SelectValue placeholder={isModelListLoading ? "加载中..." : "选择一个模型"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {availableModels.map(model => (
-                                <SelectItem key={model.id} value={model.id}>{model.displayName}</SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
+                    <Label>AI模型选择</Label>
+                    <ModelSelector
+                      selectedProviderId={selectedProviderId}
+                      selectedModelId={selectedModelId}
+                      onProviderChange={setSelectedProvider}
+                      onModelChange={setSelectedModel}
+                      showLabels={false}
+                      showModelInfo={false}
+                    />
                     <p className="text-xs text-muted-foreground mt-1">
-                      {hasApiKey() ? (
-                        <span className="text-green-600 dark:text-green-400">✓ 使用您的API密钥</span>
+                      {canGenerate ? (
+                        <span className="text-green-600 dark:text-green-400">✓ AI配置已就绪</span>
                       ) : (
-                        <span className="text-amber-600 dark:text-amber-400">⚠ 请先配置API密钥</span>
+                        <span className="text-amber-600 dark:text-amber-400">⚠ 请先配置AI提供商</span>
                       )}
                     </p>
                     <div className="mt-3">
                       <Label htmlFor='max-tokens-select'>最大输出长度</Label>
-                      <Select 
-                        value={String(maxTokens)} 
+                      <Select
+                        value={String(maxTokens)}
                         onValueChange={(v) => {
                           const n = parseInt(v, 10);
                           setMaxTokens(n);

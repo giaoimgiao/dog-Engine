@@ -32,15 +32,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { ScrollArea } from './ui/scroll-area';
 import { useState, useEffect } from 'react';
 import { useToast } from '@/hooks/use-toast';
-import { 
-  generateContent, 
-  listGeminiModels, 
-  hasApiKey, 
-  getDefaultModel,
-  type GeminiModel 
-} from '@/lib/gemini-client';
 import { getPrompts } from '@/lib/actions/community';
-import { GeminiSettings } from './GeminiSettings';
+import { AIProviderSettings } from './AIProviderSettings';
+import ModelSelector from './ModelSelector';
+import { useAI } from '@/hooks/useAI';
+import { useAIConfig } from '@/hooks/useAIConfig';
 
 interface ChapterManagerProps {
   book: Book;
@@ -76,10 +72,10 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
     return localStorage.getItem('chapter-rewrite-prompt') || DEFAULT_REWRITE_PROMPT;
   });
   
-  // AI model settings
-  const [availableModels, setAvailableModels] = useState<GeminiModel[]>([]);
-  const [isModelListLoading, setIsModelListLoading] = useState(true);
-  const [selectedModel, setSelectedModel] = useState('');
+  // 使用统一AI配置和调用
+  const { selectedProviderId, selectedModelId, setSelectedProvider, setSelectedModel } = useAIConfig();
+  const { generateContent: aiGenerateContent, canGenerate } = useAI();
+  
   const [maxTokens, setMaxTokens] = useState<number>(() => {
     if (typeof window === 'undefined') return 4096;
     const saved = localStorage.getItem('chapter-rewrite-max-tokens');
@@ -91,41 +87,11 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
   const [communityPrompts, setCommunityPrompts] = useState<CommunityPrompt[]>([]);
   const [isCommunityPromptsLoading, setIsCommunityPromptsLoading] = useState(false);
 
-  // Load models and community prompts when fetch dialog opens
+  // Load community prompts when fetch dialog opens
   useEffect(() => {
     if (!fetchDialogChapter) return;
     
     async function loadDialogData() {
-      // Load models
-      if (availableModels.length === 0) {
-        setIsModelListLoading(true);
-        try {
-          if (hasApiKey()) {
-            const models = await listGeminiModels();
-            setAvailableModels(models);
-            const flashModel = models.find(m => m.id.includes('gemini-2.5-flash') || m.id.includes('2.5-flash'));
-            if (flashModel) {
-              setSelectedModel(flashModel.id);
-            } else if (models.length > 0) {
-              setSelectedModel(models[0].id);
-            }
-          } else {
-            // 未配置API密钥时使用默认列表
-            const defaultModels: GeminiModel[] = [
-              { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
-              { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
-            ];
-            setAvailableModels(defaultModels);
-            setSelectedModel(getDefaultModel());
-          }
-        } catch (error) {
-          console.error("Failed to fetch models:", error);
-          setSelectedModel(getDefaultModel());
-        } finally {
-          setIsModelListLoading(false);
-        }
-      }
-
       // Load community prompts
       try {
         setIsCommunityPromptsLoading(true);
@@ -139,7 +105,7 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
     }
     
     loadDialogData();
-  }, [fetchDialogChapter, availableModels.length]);
+  }, [fetchDialogChapter]);
 
   const handleAddChapter = () => {
     const newChapter: Chapter = {
@@ -231,11 +197,11 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
   const handleAiRewrite = async () => {
     if (!fetchDialogChapter || !book.sourceId || !fetchDialogChapter.url) return;
     
-    if (!hasApiKey()) {
-      toast({ 
-        title: '请先配置API密钥', 
-        description: '请点击AI设置按钮配置您的Gemini API密钥',
-        variant: 'destructive' 
+    if (!canGenerate) {
+      toast({
+        title: '请先配置AI提供商',
+        description: '请点击AI设置按钮配置您的AI提供商',
+        variant: 'destructive'
       });
       return;
     }
@@ -252,19 +218,15 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
       
       // 2. AI rewrite
       const prompt = `${rewritePrompt}\n\n原文内容：\n${data.chapter.content}`;
-      const result = await generateContent(
-        selectedModel,
-        prompt,
-        {
-          temperature: 0.7,
-          maxOutputTokens: maxTokens,
-          systemInstruction: rewritePersona,
-        }
-      );
+      const result = await aiGenerateContent(prompt, {
+        temperature: 0.7,
+        maxOutputTokens: maxTokens,
+        systemInstruction: rewritePersona,
+      });
       
-      const updatedChapters = book.chapters.map(c => 
-        c.id === fetchDialogChapter.id 
-          ? { ...c, content: result, title: fetchDialogChapter.title || data.chapter.title } 
+      const updatedChapters = book.chapters.map(c =>
+        c.id === fetchDialogChapter.id
+          ? { ...c, content: result, title: fetchDialogChapter.title || data.chapter.title }
           : c
       );
       const updatedBook = { ...book, chapters: updatedChapters };
@@ -397,7 +359,7 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
                             <Download className="h-5 w-5" />
                             抓取章节内容
                         </div>
-                        <GeminiSettings variant="ghost" showStatus={true} />
+                        <AIProviderSettings variant="ghost" showStatus={true} />
                     </DialogTitle>
                     <DialogDescription>
                         选择处理方式：直接复制原文到编辑器，或使用AI仿写后添加到编辑器。
@@ -421,9 +383,9 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
                                 )}
                                 <span>直接复制原文</span>
                             </Button>
-                            <Button 
-                                onClick={handleAiRewrite} 
-                                disabled={isFetching || !hasApiKey()}
+                            <Button
+                                onClick={handleAiRewrite}
+                                disabled={isFetching || !canGenerate}
                                 className="h-16 flex-col gap-2"
                                 variant="outline"
                             >
@@ -488,31 +450,29 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
                             </div>
 
                             {/* 模型设置 */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-4">
                                 <div>
-                                    <Label htmlFor='model-select'>语言模型</Label>
-                                    <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isModelListLoading}>
-                                        <SelectTrigger id='model-select'>
-                                            <SelectValue placeholder={isModelListLoading ? "加载中..." : "选择一个模型"} />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {availableModels.map(model => (
-                                                <SelectItem key={model.id} value={model.id}>{model.displayName}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
+                                    <Label>AI模型选择</Label>
+                                    <ModelSelector
+                                        selectedProviderId={selectedProviderId}
+                                        selectedModelId={selectedModelId}
+                                        onProviderChange={setSelectedProvider}
+                                        onModelChange={setSelectedModel}
+                                        showLabels={false}
+                                        showModelInfo={false}
+                                    />
                                     <p className="text-xs text-muted-foreground mt-1">
-                                        {hasApiKey() ? (
-                                            <span className="text-green-600 dark:text-green-400">✓ 使用您的API密钥</span>
+                                        {canGenerate ? (
+                                            <span className="text-green-600 dark:text-green-400">✓ AI配置已就绪</span>
                                         ) : (
-                                            <span className="text-amber-600 dark:text-amber-400">⚠ 请先配置API密钥</span>
+                                            <span className="text-amber-600 dark:text-amber-400">⚠ 请先配置AI提供商</span>
                                         )}
                                     </p>
                                 </div>
                                 <div>
                                     <Label htmlFor='max-tokens-select'>最大输出长度</Label>
-                                    <Select 
-                                        value={String(maxTokens)} 
+                                    <Select
+                                        value={String(maxTokens)}
                                         onValueChange={(v) => {
                                             const n = parseInt(v, 10);
                                             setMaxTokens(n);

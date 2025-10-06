@@ -1,8 +1,6 @@
 'use client';
 
 import type { Chapter, Book, WorldSetting, Character, CommunityPrompt } from '@/lib/types';
-import { respondToPromptInRole } from '@/ai/flows/respond-to-prompt-in-role';
-import { listModels, type Model } from '@/ai/flows/list-models';
 import { getPrompts } from '@/lib/actions/community';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Textarea } from './ui/textarea';
@@ -24,15 +22,10 @@ import {
 } from "@/components/ui/accordion";
 import { Checkbox } from './ui/checkbox';
 import AiDetector from './AiDetector';
-import { GeminiSettings } from './GeminiSettings';
-import { 
-    generateContent,
-    generateContentStream,
-    listGeminiModels, 
-    hasApiKey, 
-    getDefaultModel,
-    type GeminiModel 
-} from '@/lib/gemini-client';
+import { AIProviderSettings } from './AIProviderSettings';
+import ModelSelector from './ModelSelector';
+import { useAI } from '@/hooks/useAI';
+import { useAIConfig } from '@/hooks/useAIConfig';
 import { useRouter } from 'next/navigation';
 
 
@@ -69,13 +62,13 @@ export default function Editor({
 
   const [isAiDialogOpen, setIsAiDialogOpen] = useState(false);
   
-  const [availableModels, setAvailableModels] = useState<GeminiModel[]>([]);
-  const [isModelListLoading, setIsModelListLoading] = useState(true);
   const [communityPrompts, setCommunityPrompts] = useState<CommunityPrompt[]>([]);
   const [isCommunityPromptsLoading, setIsCommunityPromptsLoading] = useState(true);
-  const [useFrontendApi, setUseFrontendApi] = useState(true); // 使用前端API
 
-  const [selectedModel, setSelectedModel] = useState('');
+  // 使用统一AI配置和调用
+  const { selectedProviderId, selectedModelId, setSelectedProvider, setSelectedModel } = useAIConfig();
+  const { generateContent: aiGenerateContent, generateContentStream: aiGenerateContentStream, canGenerate } = useAI();
+  
   const [temperature, setTemperature] = useState([0.7]);
   const [maxTokens, setMaxTokens] = useState([2048]);
   
@@ -101,7 +94,8 @@ export default function Editor({
     if (typeof window === 'undefined') return DEFAULT_COMPRESS_PROMPT;
     return localStorage.getItem('context-compress-prompt') || DEFAULT_COMPRESS_PROMPT;
   });
-  const [compressModel, setCompressModel] = useState<string>('');
+  // 压缩模型使用当前选中的模型
+  const compressModel = selectedModelId;
   const [compressMaxTokens, setCompressMaxTokens] = useState<number>(() => {
     if (typeof window === 'undefined') return 2048;
     const saved = localStorage.getItem('context-compress-max-tokens');
@@ -162,8 +156,8 @@ export default function Editor({
   };
 
   const handlePlotGenerate = async () => {
-    if (!hasApiKey()) {
-      toast({ title: '请先配置API密钥', description: '点击右上角 AI 设置进行配置', variant: 'destructive' });
+    if (!canGenerate) {
+      toast({ title: '请先配置AI提供商', description: '点击右上角 AI 设置进行配置', variant: 'destructive' });
       return;
     }
     setIsPlotGenerating(true);
@@ -187,11 +181,11 @@ export default function Editor({
       const systemInstruction = `${plotPersona}\n${characterContext ? `\n=== 角色设定 ===\n${characterContext}` : ''}${worldBookContext ? `\n\n=== 世界设定 ===\n${worldBookContext}` : ''}`;
       const dissatisfaction = plotDissatisfaction.trim() ? `\n\n【上次不满意点】${plotDissatisfaction.trim()}` : '';
       const finalPrompt = `${dissatisfaction}${context}`;
-      const result = await generateContent(
-        selectedModel || getDefaultModel(),
-        finalPrompt,
-        { temperature: 0.7, maxOutputTokens: Math.max(2048, maxTokens[0]), systemInstruction }
-      );
+      const result = await aiGenerateContent(finalPrompt, {
+        temperature: 0.7,
+        maxOutputTokens: Math.max(2048, maxTokens[0]),
+        systemInstruction
+      });
       setPlotResult(result);
       setPlotDissatisfaction(''); // 清空不满意输入，等用户填写新的
     } catch (e: any) {
@@ -209,10 +203,6 @@ export default function Editor({
   const [isProofDialogOpen, setIsProofDialogOpen] = useState(false);
   const [proofOriginal, setProofOriginal] = useState('');
   const [isProofing, setIsProofing] = useState(false);
-  const [proofModel, setProofModel] = useState(() => {
-    if (typeof window === 'undefined') return 'gemini-2.5-flash-lite';
-    return localStorage.getItem('proof-model') || 'gemini-2.5-flash-lite';
-  });
   const [isProofResultOpen, setIsProofResultOpen] = useState(false);
   const [proofDiffHtml, setProofDiffHtml] = useState('');
 
@@ -304,8 +294,8 @@ export default function Editor({
   }
   
   const handleProof = async () => {
-    if (!hasApiKey()) {
-      toast({ title: '请先配置API密钥', description: '点击右上角 AI 设置进行配置', variant: 'destructive' });
+    if (!canGenerate) {
+      toast({ title: '请先配置AI提供商', description: '点击右上角 AI 设置进行配置', variant: 'destructive' });
       return;
     }
     
@@ -323,9 +313,8 @@ export default function Editor({
 4. 如果某段没有错误，原样输出`;
       
       let correctedText = '';
-      const stream = generateContentStream(
-        proofModel,
-        `待校对文本：\n${content}`, 
+      const stream = aiGenerateContentStream(
+        `待校对文本：\n${content}`,
         { temperature: 0.2, maxOutputTokens: 8192, systemInstruction: sys }
       );
       
@@ -355,8 +344,8 @@ export default function Editor({
       setContent(proofOriginal);
       updateChapterContent(chapter.id, proofOriginal);
       toast({ title: '校对失败', description: e.message || '请稍后重试', variant: 'destructive' });
-    } finally { 
-      setIsProofing(false); 
+    } finally {
+      setIsProofing(false);
     }
   };
   
@@ -391,41 +380,6 @@ export default function Editor({
 
   useEffect(() => {
     async function fetchInitialData() {
-      // 加载AI模型列表
-      try {
-        setIsModelListLoading(true);
-        
-        // 始终使用前端API加载模型
-        if (hasApiKey()) {
-          const models = await listGeminiModels();
-          setAvailableModels(models);
-          const flashModel = models.find(m => m.id.includes('gemini-2.5-flash') || m.id.includes('2.5-flash'));
-          if (flashModel) {
-              setSelectedModel(flashModel.id);
-          } else if (models.length > 0) {
-              setSelectedModel(models[0].id);
-          }
-        } else {
-          // 未配置API密钥时使用默认列表
-          const defaultModels: GeminiModel[] = [
-            { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
-            { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
-          ];
-          setAvailableModels(defaultModels);
-          setSelectedModel(getDefaultModel());
-        }
-      } catch (error) {
-        console.error("Failed to fetch models:", error);
-        toast({
-            title: '模型列表加载失败',
-            description: '无法从API获取语言模型列表，将使用默认模型。',
-            variant: 'destructive',
-        });
-         setSelectedModel(getDefaultModel());
-      } finally {
-        setIsModelListLoading(false);
-      }
-      
       // 加载社区提示
       try {
         setIsCommunityPromptsLoading(true);
@@ -486,11 +440,11 @@ export default function Editor({
       return;
     }
 
-    // 检查API密钥
-    if (!hasApiKey()) {
+    // 检查AI配置
+    if (!canGenerate) {
       toast({
-        title: '请先配置API密钥',
-        description: '请点击右上角AI设置按钮配置您的Gemini API密钥',
+        title: '请先配置AI提供商',
+        description: '请点击右上角AI设置按钮配置您的AI提供商',
         variant: 'destructive',
       });
       return;
@@ -531,16 +485,12 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
 
 请根据用户的指令和以上上下文信息进行创作。`;
 
-      // 使用前端API调用Gemini
-      const result = await generateContent(
-        selectedModel,
-        prompt,
-        {
-          temperature: temperature[0],
-          maxOutputTokens: maxTokens[0],
-          systemInstruction,
-        }
-      );
+      // 使用统一AI客户端
+      const result = await aiGenerateContent(prompt, {
+        temperature: temperature[0],
+        maxOutputTokens: maxTokens[0],
+        systemInstruction,
+      });
       
       setContent(result);
       updateChapterContent(chapter.id, result);
@@ -563,8 +513,8 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
 
   const handleCompress = async () => {
     if (isCompressing) return;
-    if (!hasApiKey()) {
-      toast({ title: '请先配置API密钥', description: '点击右上角 AI 设置进行配置', variant: 'destructive' });
+    if (!canGenerate) {
+      toast({ title: '请先配置AI提供商', description: '点击右上角 AI 设置进行配置', variant: 'destructive' });
       return;
     }
     const contextToCompress = otherChapters
@@ -578,8 +528,7 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
     setIsCompressing(true);
     try {
       const prompt = `${compressPrompt}\n\n=== 原文多章节内容 ===\n${contextToCompress}`;
-      const modelId = compressModel || selectedModel || getDefaultModel();
-      const summary = await generateContent(modelId, prompt, {
+      const summary = await aiGenerateContent(prompt, {
         temperature: 0.2,
         maxOutputTokens: compressMaxTokens,
         systemInstruction: compressPersona,
@@ -602,7 +551,7 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
             <h2 className="text-lg sm:text-2xl font-bold font-headline">{chapter.title}</h2>
             <div className='flex items-center gap-1 sm:gap-2'>
                 <div className="text-[11px] sm:text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">字数：<span className="font-medium">{currentCount}</span></div>
-                <GeminiSettings showStatus={true} />
+                <AIProviderSettings showStatus={true} />
                 <AiDetector text={content} />
             </div>
         </div>
@@ -664,18 +613,15 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
                       </div>
                       <Textarea rows={6} value={plotPersona} onChange={(e) => { setPlotPersona(e.target.value); if (typeof window !== 'undefined') localStorage.setItem('plot-persona', e.target.value); }} placeholder="输入续写提示词" />
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label>使用模型</Label>
-                        <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isModelListLoading}>
-                          <SelectTrigger>
-                            <SelectValue placeholder={isModelListLoading ? '加载中...' : '选择模型'} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableModels.map(m => (<SelectItem key={m.id} value={m.id}>{m.displayName}</SelectItem>))}
-                          </SelectContent>
-                        </Select>
-                      </div>
+                    <div className="space-y-4">
+                      <ModelSelector
+                        selectedProviderId={selectedProviderId}
+                        selectedModelId={selectedModelId}
+                        onProviderChange={setSelectedProvider}
+                        onModelChange={setSelectedModel}
+                        compact={true}
+                        showLabels={false}
+                      />
                       <div className="space-y-2">
                         <Label>最大输出</Label>
                         <Select value={String(maxTokens[0])} onValueChange={(v) => setMaxTokens([parseInt(v, 10)])}>
@@ -757,16 +703,16 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
             <div className="space-y-4 py-4">
               <div className="space-y-2">
                 <Label>校对模型</Label>
-                <Select value={proofModel} onValueChange={(v) => { setProofModel(v); if (typeof window !== 'undefined') localStorage.setItem('proof-model', v); }} disabled={isModelListLoading}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={isModelListLoading ? '加载中...' : '选择模型'} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableModels.map(m => (<SelectItem key={m.id} value={m.id}>{m.displayName}</SelectItem>))}
-                  </SelectContent>
-                </Select>
+                <ModelSelector
+                  selectedProviderId={selectedProviderId}
+                  selectedModelId={selectedModelId}
+                  onProviderChange={setSelectedProvider}
+                  onModelChange={setSelectedModel}
+                  compact={true}
+                  showLabels={false}
+                />
                 <p className="text-xs text-muted-foreground">
-                  默认使用 <span className="font-medium">gemini-2.5-flash-lite</span> 进行快速校对
+                  使用当前选中的AI模型进行校对
                 </p>
               </div>
               
@@ -898,17 +844,9 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
                                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                                     <div className="space-y-2">
                                                         <Label>压缩使用模型</Label>
-                                                        <Select value={compressModel || selectedModel} onValueChange={setCompressModel} disabled={isModelListLoading}>
-                                                            <SelectTrigger>
-                                                                <SelectValue placeholder={isModelListLoading ? '加载中...' : '选择模型'} />
-                                                            </SelectTrigger>
-                                                            <SelectContent>
-                                                                {(availableModels.length ? availableModels : [{id:selectedModel, displayName:selectedModel, name:selectedModel}] as any).map((m: any) => (
-                                                                    <SelectItem key={m.id} value={m.id}>{m.displayName || m.id}</SelectItem>
-                                                                ))}
-                                                            </SelectContent>
-                                                        </Select>
-                                                        <div className="text-xs text-muted-foreground">默认使用当前生成模型</div>
+                                                        <div className="text-sm text-muted-foreground">
+                                                            使用当前选中的模型: {selectedModelId || '未选择'}
+                                                        </div>
                                                     </div>
                                                     <div className="space-y-2">
                                                         <Label>压缩最大输出</Label>
@@ -980,22 +918,20 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
                                 </AccordionTrigger>
                                 <AccordionContent className="pt-4 space-y-6">
                                     <div className="grid gap-2">
-                                        <Label>语言模型</Label>
-                                        <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isModelListLoading}>
-                                            <SelectTrigger>
-                                                <SelectValue placeholder={isModelListLoading ? "加载中..." : "选择一个模型"} />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {availableModels.map(model => (
-                                                    <SelectItem key={model.id} value={model.id}>{model.displayName}</SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
+                                        <Label>AI模型选择</Label>
+                                        <ModelSelector
+                                            selectedProviderId={selectedProviderId}
+                                            selectedModelId={selectedModelId}
+                                            onProviderChange={setSelectedProvider}
+                                            onModelChange={setSelectedModel}
+                                            showLabels={false}
+                                            showModelInfo={false}
+                                        />
                                         <p className="text-xs text-muted-foreground">
-                                            {hasApiKey() ? (
-                                                <span className="text-green-600 dark:text-green-400">✓ 使用您的API密钥</span>
+                                            {canGenerate ? (
+                                                <span className="text-green-600 dark:text-green-400">✓ AI配置已就绪</span>
                                             ) : (
-                                                <span className="text-amber-600 dark:text-amber-400">⚠ 请先配置API密钥</span>
+                                                <span className="text-amber-600 dark:text-amber-400">⚠ 请先配置AI提供商</span>
                                             )}
                                         </p>
                                     </div>

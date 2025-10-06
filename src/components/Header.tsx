@@ -2,6 +2,7 @@ import Link from 'next/link';
 import Logo from './Logo';
 import { Book, Globe, Users, Library, Settings, Home } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { AIProviderSettings } from './AIProviderSettings';
 
 type HeaderProps = {
   children?: React.ReactNode;
@@ -43,6 +44,7 @@ export default function Header({ children }: HeaderProps) {
             </nav>
         </div>
         <div className="flex items-center gap-2">
+          <AIProviderSettings variant="ghost" showStatus={true} />
           {children}
         </div>
       </div>

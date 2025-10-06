@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { BookSource, BookSourceRule } from '@/lib/types';
-import { Plus, Trash2, Edit, Save, X, Book, Globe, Upload, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Edit, Save, X, Book, Globe, Upload, Loader2, Bot, Settings } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -23,6 +23,7 @@ import {
   DialogTrigger,
   DialogClose,
 } from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -31,6 +32,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
+import { AIProviderSettings } from '@/components/AIProviderSettings';
 
 async function fetchSources(): Promise<BookSource[]> {
     try {
@@ -495,109 +497,196 @@ function SettingsPageInner() {
       <main className="flex-grow container mx-auto p-4 md:p-6 lg:p-8">
         <div className="max-w-4xl mx-auto">
           <div className="flex justify-between items-center mb-6">
-            <h1 className="text-3xl font-bold font-headline flex items-center gap-2"><Book className="w-8 h-8"/>书源管理</h1>
-            <div className='flex gap-2'>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileImport}
-                accept=".json"
-                className="hidden"
-              />
-              <Button 
-                variant="outline" 
-                onClick={handleImportClick}
-                disabled={isImporting}
-              >
-                {isImporting ? (
-                  <>
-                    <Loader2 className="mr-2 animate-spin" />
-                    保存中...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="mr-2" />
-                    导入书源
-                  </>
-                )}
-              </Button>
-              <Dialog open={isFormOpen} onOpenChange={(open) => {
-                  if(!open) setEditingSource(null);
-                  setIsFormOpen(open);
-              }}>
-                <DialogTrigger asChild>
-                  <Button onClick={openNewForm}>
-                    <Plus className="mr-2" />
-                    添加书源
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-2xl">
-                  <DialogHeader>
-                      <DialogTitle>{editingSource ? '编辑书源' : '添加新书源'}</DialogTitle>
-                      <DialogDescription>
-                          配置网络小说书源，用于搜索和导入书籍。
-                      </DialogDescription>
-                  </DialogHeader>
-                   <BookSourceForm 
-                      onSave={handleSaveSource}
-                      source={editingSource}
-                      onCancel={() => setIsFormOpen(false)}
-                   />
-                </DialogContent>
-              </Dialog>
-            </div>
+            <h1 className="text-3xl font-bold font-headline flex items-center gap-2">
+              <Settings className="w-8 h-8"/>
+              系统设置
+            </h1>
           </div>
           
-          <div className="space-y-2">
-            {isMounted && sources.length > 0 ? (
-              sources.map(source => (
-                <Card key={source.id} className={!source.enabled ? 'opacity-50' : ''}>
-                  <Accordion type="single" collapsible>
-                    <AccordionItem value="item-1" className="border-b-0">
-                      <CardContent className="flex items-center justify-between p-4">
-                        <div className="flex items-center gap-4 overflow-hidden">
-                            <AccordionTrigger className="p-0 hover:no-underline">
-                              <div className="flex items-center gap-4 ">
-                                <Globe className="w-6 h-6 text-muted-foreground flex-shrink-0"/>
-                                <div className="overflow-hidden text-left">
-                                    <p className="font-bold truncate">{source.name}</p>
-                                    <p className="text-sm text-muted-foreground truncate">{source.url}</p>
-                                </div>
-                              </div>
-                            </AccordionTrigger>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                           <Switch 
-                            checked={source.enabled}
-                            onCheckedChange={(checked) => handleToggleSource(source.id, checked)}
-                           />
-                       <Button variant="outline" size="sm" onClick={() => openAuthDialog(source)}>认证设置</Button>
-                           <Button variant="ghost" size="icon" onClick={() => openEditForm(source)}>
-                               <Edit className="h-4 w-4"/>
-                           </Button>
-                           <Button variant="ghost" size="icon" className="text-destructive/70 hover:text-destructive" onClick={() => handleDeleteSource(source.id)}>
-                               <Trash2 className="h-4 w-4"/>
-                           </Button>
-                        </div>
-                      </CardContent>
-                      <AccordionContent>
-                        <div className="px-4 pb-4">
-                          <pre className="bg-muted/50 p-4 rounded-md text-xs overflow-x-auto">
-                            {JSON.stringify(source.rules || { '无解析规则': true }, null, 2)}
-                          </pre>
-                        </div>
-                      </AccordionContent>
-                    </AccordionItem>
-                  </Accordion>
-                </Card>
-              ))
-            ) : (
-                 <div className="text-center py-20 border-2 border-dashed rounded-lg">
-                    <h2 className="text-xl font-semibold text-muted-foreground">{isMounted ? "暂无书源" : "正在加载书源..."}</h2>
-                    <p className="text-muted-foreground mt-2">{isMounted && "点击“添加书源”或“导入书源”来配置你的小说来源吧！"}</p>
+          <Tabs defaultValue="book-sources" className="w-full">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="book-sources" className="flex items-center gap-2">
+                <Book className="w-4 h-4" />
+                书源管理
+              </TabsTrigger>
+              <TabsTrigger value="ai-providers" className="flex items-center gap-2">
+                <Bot className="w-4 h-4" />
+                AI配置
+              </TabsTrigger>
+            </TabsList>
+            
+            <TabsContent value="book-sources" className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-semibold">书源管理</h2>
+                <div className='flex gap-2'>
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileImport}
+                    accept=".json"
+                    className="hidden"
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={handleImportClick}
+                    disabled={isImporting}
+                  >
+                    {isImporting ? (
+                      <>
+                        <Loader2 className="mr-2 animate-spin" />
+                        保存中...
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="mr-2" />
+                        导入书源
+                      </>
+                    )}
+                  </Button>
+                  <Dialog open={isFormOpen} onOpenChange={(open) => {
+                      if(!open) setEditingSource(null);
+                      setIsFormOpen(open);
+                  }}>
+                    <DialogTrigger asChild>
+                      <Button onClick={openNewForm}>
+                        <Plus className="mr-2" />
+                        添加书源
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-2xl">
+                      <DialogHeader>
+                          <DialogTitle>{editingSource ? '编辑书源' : '添加新书源'}</DialogTitle>
+                          <DialogDescription>
+                              配置网络小说书源，用于搜索和导入书籍。
+                          </DialogDescription>
+                      </DialogHeader>
+                       <BookSourceForm
+                          onSave={handleSaveSource}
+                          source={editingSource}
+                          onCancel={() => setIsFormOpen(false)}
+                       />
+                    </DialogContent>
+                  </Dialog>
                 </div>
-            )}
-          </div>
+              </div>
+              
+              <div className="space-y-2">
+                {isMounted && sources.length > 0 ? (
+                  sources.map(source => (
+                    <Card key={source.id} className={!source.enabled ? 'opacity-50' : ''}>
+                      <Accordion type="single" collapsible>
+                        <AccordionItem value="item-1" className="border-b-0">
+                          <CardContent className="flex items-center justify-between p-4">
+                            <div className="flex items-center gap-4 overflow-hidden">
+                                <AccordionTrigger className="p-0 hover:no-underline">
+                                  <div className="flex items-center gap-4 ">
+                                    <Globe className="w-6 h-6 text-muted-foreground flex-shrink-0"/>
+                                    <div className="overflow-hidden text-left">
+                                        <p className="font-bold truncate">{source.name}</p>
+                                        <p className="text-sm text-muted-foreground truncate">{source.url}</p>
+                                    </div>
+                                  </div>
+                                </AccordionTrigger>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                               <Switch
+                                checked={source.enabled}
+                                onCheckedChange={(checked) => handleToggleSource(source.id, checked)}
+                               />
+                           <Button variant="outline" size="sm" onClick={() => openAuthDialog(source)}>认证设置</Button>
+                               <Button variant="ghost" size="icon" onClick={() => openEditForm(source)}>
+                                   <Edit className="h-4 w-4"/>
+                               </Button>
+                               <Button variant="ghost" size="icon" className="text-destructive/70 hover:text-destructive" onClick={() => handleDeleteSource(source.id)}>
+                                   <Trash2 className="h-4 w-4"/>
+                               </Button>
+                            </div>
+                          </CardContent>
+                          <AccordionContent>
+                            <div className="px-4 pb-4">
+                              <pre className="bg-muted/50 p-4 rounded-md text-xs overflow-x-auto">
+                                {JSON.stringify(source.rules || { '无解析规则': true }, null, 2)}
+                              </pre>
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
+                    </Card>
+                  ))
+                ) : (
+                     <div className="text-center py-20 border-2 border-dashed rounded-lg">
+                        <h2 className="text-xl font-semibold text-muted-foreground">{isMounted ? "暂无书源" : "正在加载书源..."}</h2>
+                        <p className="text-muted-foreground mt-2">{isMounted && "点击「添加书源」或「导入书源」来配置你的小说来源吧！"}</p>
+                    </div>
+                )}
+              </div>
+            </TabsContent>
+            
+            <TabsContent value="ai-providers" className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-semibold">AI模型配置</h2>
+              </div>
+              
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Bot className="w-5 h-5" />
+                    AI提供商管理
+                  </CardTitle>
+                  <CardDescription>
+                    配置和管理您的AI提供商，支持OpenAI、Gemini、Claude等多种服务。
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <AIProviderSettings
+                    trigger={
+                      <Button className="w-full">
+                        <Settings className="w-4 h-4 mr-2" />
+                        打开AI配置管理
+                      </Button>
+                    }
+                    variant="default"
+                    showStatus={true}
+                  />
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader>
+                  <CardTitle>使用说明</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <h4 className="font-medium">支持的AI提供商</h4>
+                    <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                      <li><strong>Google Gemini</strong> - 免费额度丰富，支持长文本</li>
+                      <li><strong>OpenAI GPT</strong> - 业界标准，质量稳定</li>
+                      <li><strong>Anthropic Claude</strong> - 擅长长文本理解和创作</li>
+                      <li><strong>其他兼容服务</strong> - 支持OpenAI API格式的服务</li>
+                    </ul>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <h4 className="font-medium">配置步骤</h4>
+                    <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
+                      <li>点击"打开AI配置管理"按钮</li>
+                      <li>添加您的AI提供商配置</li>
+                      <li>输入API密钥和相关信息</li>
+                      <li>测试连接确保配置正确</li>
+                      <li>在编辑器中选择对应的模型使用</li>
+                    </ol>
+                  </div>
+                  
+                  <div className="p-3 bg-muted/50 rounded-md">
+                    <p className="text-xs text-muted-foreground">
+                      💡 提示：配置信息仅保存在您的浏览器本地，不会上传到服务器。
+                      建议定期导出配置文件作为备份。
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
         </div>
       </main>
 
