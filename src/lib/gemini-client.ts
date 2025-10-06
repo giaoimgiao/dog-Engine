@@ -156,7 +156,7 @@ export async function listGeminiModels(apiKey?: string): Promise<GeminiModel[]> 
         console.error('Failed to fetch models:', error);
         // 返回默认模型列表作为fallback
         return [
-            { id: 'ggemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite', displayName: 'gemini-2.5-flash-lite' },
+            { id: 'gemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite', displayName: 'Gemini 2.5 Flash Lite' },
             { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
             { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
             { id: 'gemini-1.5-pro', name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro' },

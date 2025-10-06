@@ -65,10 +65,17 @@ export function ModelSelector({
 
     // 当选中的提供商变化时，加载对应的模型列表
     useEffect(() => {
-        if (selectedProviderId && !providerModels[selectedProviderId]?.models.length) {
+        if (selectedProviderId && !providerModels[selectedProviderId]?.models.length && !providerModels[selectedProviderId]?.loading) {
             loadModelsForProvider(selectedProviderId);
         }
-    }, [selectedProviderId]);
+    }, [selectedProviderId, providerModels]);
+
+    // 组件挂载时，如果已有选中的提供商但没有模型数据，强制加载
+    useEffect(() => {
+        if (selectedProviderId && providers.length > 0 && !providerModels[selectedProviderId]) {
+            loadModelsForProvider(selectedProviderId);
+        }
+    }, [providers, selectedProviderId]);
 
     const loadProviders = () => {
         try {
@@ -78,7 +85,12 @@ export function ModelSelector({
             
             // 如果没有选中的提供商，自动选择第一个
             if (!selectedProviderId && configs.length > 0) {
-                onProviderChange(configs[0].id);
+                const firstProvider = configs[0];
+                onProviderChange(firstProvider.id);
+                // 立即加载第一个提供商的模型列表
+                setTimeout(() => {
+                    loadModelsForProvider(firstProvider.id);
+                }, 0);
             }
         } catch (error: any) {
             toast({
@@ -128,7 +140,10 @@ export function ModelSelector({
             // 如果没有选中的模型，自动选择默认模型或第一个模型
             if (!selectedModelId && filteredModels.length > 0) {
                 const defaultModel = filteredModels.find(m => m.id === provider.defaultModel) || filteredModels[0];
-                onModelChange(defaultModel.id);
+                // 使用 setTimeout 确保状态更新不会冲突
+                setTimeout(() => {
+                    onModelChange(defaultModel.id);
+                }, 0);
             }
         } catch (error: any) {
             setProviderModels(prev => ({
@@ -154,7 +169,7 @@ export function ModelSelector({
         onModelChange(''); // 清空模型选择
         
         // 加载新提供商的模型列表
-        if (!providerModels[providerId]?.models.length) {
+        if (!providerModels[providerId]?.models.length && !providerModels[providerId]?.loading) {
             loadModelsForProvider(providerId);
         }
     };

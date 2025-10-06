@@ -145,6 +145,17 @@ export default function Editor({
   const [plotDissatisfaction, setPlotDissatisfaction] = useState<string>('');
   const [plotResult, setPlotResult] = useState<string>('');
   const [isPlotGenerating, setIsPlotGenerating] = useState(false);
+  
+  // 强制刷新模型列表的key，用于在弹窗打开时重新加载
+  const [plotModelSelectorKey, setPlotModelSelectorKey] = useState(0);
+
+  // 监听剧情抽卡弹窗打开状态，强制刷新模型选择器
+  useEffect(() => {
+    if (isPlotDialogOpen) {
+      // 弹窗打开时，强制刷新模型选择器以触发模型列表加载
+      setPlotModelSelectorKey(prev => prev + 1);
+    }
+  }, [isPlotDialogOpen]);
 
   const handleCommunityPromptSelectForPlot = (promptId: string) => {
     const selected = communityPrompts.find(p => p.id === promptId);
@@ -615,6 +626,7 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
                     </div>
                     <div className="space-y-4">
                       <ModelSelector
+                        key={plotModelSelectorKey}
                         selectedProviderId={selectedProviderId}
                         selectedModelId={selectedModelId}
                         onProviderChange={setSelectedProvider}

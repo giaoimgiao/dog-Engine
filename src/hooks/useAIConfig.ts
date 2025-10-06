@@ -40,6 +40,10 @@ export function useAIConfig() {
                     if (firstProvider.defaultModel) {
                         setSelectedModelId(firstProvider.defaultModel);
                         AIConfigManager.setSelectedModel(firstProvider.defaultModel);
+                    } else {
+                        // 清空模型选择，让ModelSelector重新加载
+                        setSelectedModelId('');
+                        AIConfigManager.setSelectedModel('');
                     }
                 } else {
                     setSelectedProviderId('');
