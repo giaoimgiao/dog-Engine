@@ -178,7 +178,6 @@ export default function TalentTestPage() {
     
     const question = questions[currentQuestion];
     const selected = question.options[optionIndex];
-    const newScore = currentScore + selected.score;
 
     // 设置选中状态
     setSelectedOption(optionIndex);
@@ -190,7 +189,8 @@ export default function TalentTestPage() {
       setTimeout(() => setScoreChange(null), 1500);
     }
 
-    setCurrentScore(newScore);
+    // 使用函数式更新，避免闭包中拿到旧值
+    setCurrentScore((prev) => prev + selected.score);
     setAnswers([...answers, optionIndex]);
 
     // 延迟2秒后进入下一题，让用户看到正确答案
@@ -241,7 +241,6 @@ export default function TalentTestPage() {
     // 如果不完全正确（选错或漏选），扣20分
     const totalScore = isFullyCorrect ? 0 : -20;
 
-    const newScore = currentScore + totalScore;
     setAnswerState('answered');
 
     // 显示分数变化
@@ -250,7 +249,8 @@ export default function TalentTestPage() {
       setTimeout(() => setScoreChange(null), 1500);
     }
 
-    setCurrentScore(newScore);
+    // 使用函数式更新分数，避免不同浏览器的状态竞态
+    setCurrentScore((prev) => prev + totalScore);
     setAnswers([...answers, ...multipleChoiceSelections]);
 
     // 最后一题延迟30秒，其他题延迟2秒
