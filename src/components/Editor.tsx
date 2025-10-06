@@ -629,7 +629,7 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
                             <SelectValue placeholder="选择最大输出" />
                           </SelectTrigger>
                           <SelectContent>
-                            {[2048, 3072, 4096, 6144, 8192].map(n => (<SelectItem key={n} value={String(n)}>{n}</SelectItem>))}
+                            {[2048, 3072, 4096, 6144, 8192, 16000, 30000].map(n => (<SelectItem key={n} value={String(n)}>{n}</SelectItem>))}
                           </SelectContent>
                         </Select>
                       </div>

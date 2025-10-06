@@ -485,7 +485,7 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
                                             <SelectValue placeholder="选择最大输出长度" />
                                         </SelectTrigger>
                                         <SelectContent>
-                                            {[1024, 2048, 4096, 6144, 8192].map(n => (
+                                            {[1024, 2048, 4096, 6144, 8192, 16000, 30000].map(n => (
                                                 <SelectItem key={n} value={String(n)}>{n}</SelectItem>
                                             ))}
                                         </SelectContent>
