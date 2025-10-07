@@ -486,8 +486,8 @@ export function AIProviderSettings({
             <DialogTrigger asChild>
                 {trigger || defaultTrigger}
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-hidden">
-                <DialogHeader>
+            <DialogContent className="sm:max-w-[800px] max-h-[90vh] flex flex-col">
+                <DialogHeader className="flex-shrink-0">
                     <DialogTitle className="flex items-center gap-2">
                         <Bot className="w-5 h-5" />
                         AI 提供商配置
@@ -497,7 +497,7 @@ export function AIProviderSettings({
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="flex-1 overflow-y-auto space-y-4">
+                <div className="flex-1 overflow-y-auto space-y-4 min-h-0">
                     {/* 操作按钮 */}
                     <div className="flex justify-between items-center">
                         <div className="flex gap-2">
@@ -681,7 +681,7 @@ export function AIProviderSettings({
                     </div>
                 </div>
 
-                <DialogFooter>
+                <DialogFooter className="flex-shrink-0 mt-4">
                     <DialogClose asChild>
                         <Button variant="secondary">关闭</Button>
                     </DialogClose>
