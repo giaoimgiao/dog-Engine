@@ -47,6 +47,7 @@ import { AIConfigManager } from '@/lib/ai/config-manager';
 import { getUnifiedAIClient } from '@/lib/ai/unified-client';
 import type { AIProviderConfig, ConnectionTestResult } from '@/lib/ai/providers/base';
 import { OPENAI_COMPATIBLE_CONFIGS } from '@/lib/ai/providers/openai-compatible';
+import { GEMINI_PROVIDER_TEMPLATES } from '@/lib/ai/providers/gemini';
 
 interface AIProviderSettingsProps {
     /** 自定义触发按钮 */
@@ -67,6 +68,12 @@ interface ProviderFormData {
     enabled: boolean;
     defaultModel?: string;
     customHeaders?: string; // JSON字符串
+    // 高级设置
+    defaultTemperature?: number;
+    defaultTopP?: number;
+    defaultTopK?: number;
+    enableDynamicThinking?: boolean;
+    thinkingBudget?: number;
 }
 
 function ProviderForm({ 
@@ -88,6 +95,12 @@ function ProviderForm({
         enabled: provider?.enabled ?? true,
         defaultModel: provider?.defaultModel || '',
         customHeaders: provider?.customHeaders ? JSON.stringify(provider.customHeaders, null, 2) : '',
+        // 高级设置
+        defaultTemperature: provider?.advancedConfig?.defaultTemperature,
+        defaultTopP: provider?.advancedConfig?.defaultTopP,
+        defaultTopK: provider?.advancedConfig?.defaultTopK,
+        enableDynamicThinking: provider?.advancedConfig?.enableDynamicThinking ?? false,
+        thinkingBudget: provider?.advancedConfig?.thinkingBudget,
     });
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -102,17 +115,35 @@ function ProviderForm({
     };
 
     const handlePresetSelect = (presetKey: string) => {
-        const preset = OPENAI_COMPATIBLE_CONFIGS[presetKey as keyof typeof OPENAI_COMPATIBLE_CONFIGS];
-        if (preset) {
-            setFormData(prev => ({
-                ...prev,
-                name: preset.name,
-                displayName: preset.displayName,
-                type: 'openai',
-                apiUrl: preset.apiUrl,
-                defaultModel: preset.defaultModel,
-                customHeaders: preset.customHeaders ? JSON.stringify(preset.customHeaders, null, 2) : '',
-            }));
+        // 检查是否是 Gemini 模板
+        if (presetKey.startsWith('GEMINI_')) {
+            const geminiKey = presetKey.replace('GEMINI_', '') as keyof typeof GEMINI_PROVIDER_TEMPLATES;
+            const preset = GEMINI_PROVIDER_TEMPLATES[geminiKey];
+            if (preset) {
+                setFormData(prev => ({
+                    ...prev,
+                    name: preset.name,
+                    displayName: preset.displayName,
+                    type: 'gemini',
+                    apiUrl: preset.apiUrl,
+                    defaultModel: preset.defaultModel,
+                    customHeaders: '',
+                }));
+            }
+        } else {
+            // OpenAI 兼容模板
+            const preset = OPENAI_COMPATIBLE_CONFIGS[presetKey as keyof typeof OPENAI_COMPATIBLE_CONFIGS];
+            if (preset) {
+                setFormData(prev => ({
+                    ...prev,
+                    name: preset.name,
+                    displayName: preset.displayName,
+                    type: 'openai',
+                    apiUrl: preset.apiUrl,
+                    defaultModel: preset.defaultModel,
+                    customHeaders: preset.customHeaders ? JSON.stringify(preset.customHeaders, null, 2) : '',
+                }));
+            }
         }
     };
 
@@ -127,6 +158,7 @@ function ProviderForm({
                             <SelectValue placeholder="选择预设模板（可选）" />
                         </SelectTrigger>
                         <SelectContent>
+                            <SelectItem value="GEMINI_GOOGLE_GEMINI">Google Gemini</SelectItem>
                             <SelectItem value="OPENAI">OpenAI</SelectItem>
                             <SelectItem value="CLAUDE">Anthropic Claude</SelectItem>
                             <SelectItem value="DEEPSEEK">DeepSeek</SelectItem>
@@ -170,7 +202,7 @@ function ProviderForm({
                     id="apiUrl"
                     value={formData.apiUrl}
                     onChange={(e) => setFormData(prev => ({ ...prev, apiUrl: e.target.value }))}
-                    placeholder="https://api.openai.com/v1"
+                    placeholder={formData.type === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta' : 'https://api.openai.com/v1'}
                     required
                 />
             </div>
@@ -193,7 +225,7 @@ function ProviderForm({
                     id="defaultModel"
                     value={formData.defaultModel}
                     onChange={(e) => setFormData(prev => ({ ...prev, defaultModel: e.target.value }))}
-                    placeholder="例如：gpt-3.5-turbo"
+                    placeholder={formData.type === 'gemini' ? '例如：gemini-2.5-flash' : '例如：gpt-3.5-turbo'}
                 />
             </div>
 
@@ -216,6 +248,110 @@ function ProviderForm({
                     onCheckedChange={(checked) => setFormData(prev => ({ ...prev, enabled: checked }))}
                 />
                 <Label htmlFor="enabled">启用此提供商</Label>
+            </div>
+
+            {/* 高级设置 */}
+            <div className="space-y-4 border-t pt-4">
+                <h3 className="text-lg font-medium">高级设置</h3>
+                
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                        <Label htmlFor="defaultTemperature">默认温度 (0-1)</Label>
+                        <Input
+                            id="defaultTemperature"
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="0.1"
+                            value={formData.defaultTemperature || ''}
+                            onChange={(e) => setFormData(prev => ({
+                                ...prev,
+                                defaultTemperature: e.target.value ? parseFloat(e.target.value) : undefined
+                            }))}
+                            placeholder="例如：0.7"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="defaultTopP">默认Top-P (0-1)</Label>
+                        <Input
+                            id="defaultTopP"
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="0.1"
+                            value={formData.defaultTopP || ''}
+                            onChange={(e) => setFormData(prev => ({
+                                ...prev,
+                                defaultTopP: e.target.value ? parseFloat(e.target.value) : undefined
+                            }))}
+                            placeholder="例如：0.9"
+                        />
+                    </div>
+                </div>
+
+                <div className="space-y-2">
+                    <Label htmlFor="defaultTopK">默认Top-K</Label>
+                    <Input
+                        id="defaultTopK"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={formData.defaultTopK || ''}
+                        onChange={(e) => setFormData(prev => ({
+                            ...prev,
+                            defaultTopK: e.target.value ? parseInt(e.target.value) : undefined
+                        }))}
+                        placeholder="例如：40"
+                    />
+                </div>
+
+                {/* Gemini 2.5 系列特有设置 */}
+                {formData.type === 'gemini' && (
+                    <div className="space-y-4 border-t pt-4">
+                        <h4 className="font-medium text-blue-600">Gemini 2.5 系列专用设置</h4>
+                        
+                        <div className="flex items-center space-x-2">
+                            <Switch
+                                id="enableDynamicThinking"
+                                checked={formData.enableDynamicThinking}
+                                onCheckedChange={(checked) => setFormData(prev => ({
+                                    ...prev,
+                                    enableDynamicThinking: checked,
+                                    thinkingBudget: checked ? -1 : prev.thinkingBudget
+                                }))}
+                            />
+                            <Label htmlFor="enableDynamicThinking">启用动态思考</Label>
+                        </div>
+                        
+                        {!formData.enableDynamicThinking && (
+                            <div className="space-y-2">
+                                <Label htmlFor="thinkingBudget">思考预算 (Token数)</Label>
+                                <Input
+                                    id="thinkingBudget"
+                                    type="number"
+                                    min="0"
+                                    step="1"
+                                    value={formData.thinkingBudget || ''}
+                                    onChange={(e) => setFormData(prev => ({
+                                        ...prev,
+                                        thinkingBudget: e.target.value ? parseInt(e.target.value) : undefined
+                                    }))}
+                                    placeholder="例如：1024 (0为禁用思考)"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    设置为0禁用思考，设置为-1启用动态思考，或指定固定的token数量
+                                </p>
+                            </div>
+                        )}
+                        
+                        <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-md">
+                            <p className="text-xs text-blue-700 dark:text-blue-300">
+                                💡 思考功能仅在 Gemini 2.5 Flash、2.5 Pro 和 2.5 Flash-Lite 中受支持。
+                                动态思考会根据请求复杂程度自动调整预算。
+                            </p>
+                        </div>
+                    </div>
+                )}
             </div>
 
             <DialogFooter>
@@ -278,6 +414,25 @@ export function AIProviderSettings({
                 }
             }
 
+            // 构建高级配置
+            const advancedConfig: import('@/lib/ai/providers/base').AdvancedGenerationConfig = {};
+            
+            if (formData.defaultTemperature !== undefined) {
+                advancedConfig.defaultTemperature = formData.defaultTemperature;
+            }
+            if (formData.defaultTopP !== undefined) {
+                advancedConfig.defaultTopP = formData.defaultTopP;
+            }
+            if (formData.defaultTopK !== undefined) {
+                advancedConfig.defaultTopK = formData.defaultTopK;
+            }
+            if (formData.type === 'gemini') {
+                advancedConfig.enableDynamicThinking = formData.enableDynamicThinking;
+                if (formData.thinkingBudget !== undefined) {
+                    advancedConfig.thinkingBudget = formData.thinkingBudget;
+                }
+            }
+
             const providerConfig: Omit<AIProviderConfig, 'createdAt' | 'updatedAt'> = {
                 id: formData.id,
                 name: formData.name || formData.id,
@@ -288,6 +443,7 @@ export function AIProviderSettings({
                 enabled: formData.enabled,
                 defaultModel: formData.defaultModel,
                 customHeaders,
+                advancedConfig: Object.keys(advancedConfig).length > 0 ? advancedConfig : undefined,
             };
 
             if (editingProvider) {

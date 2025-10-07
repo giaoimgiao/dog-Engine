@@ -39,6 +39,24 @@ export interface GenerateOptions {
   topK?: number;
   /** 自定义请求头 */
   customHeaders?: Record<string, string>;
+  /** 思考预算（仅Gemini 2.5系列支持，-1为动态思考，0为禁用，>0为固定token数） */
+  thinkingBudget?: number;
+}
+
+/**
+ * 高级生成配置
+ */
+export interface AdvancedGenerationConfig {
+  /** 默认温度参数 (0-1) */
+  defaultTemperature?: number;
+  /** 默认Top-p参数 (0-1) */
+  defaultTopP?: number;
+  /** 默认Top-k参数 */
+  defaultTopK?: number;
+  /** 是否启用动态思考（仅Gemini 2.5系列） */
+  enableDynamicThinking?: boolean;
+  /** 思考预算token数（仅Gemini 2.5系列，-1为动态，0为禁用） */
+  thinkingBudget?: number;
 }
 
 /**
@@ -157,6 +175,8 @@ export interface AIProviderConfig {
   createdAt: string;
   /** 更新时间 */
   updatedAt: string;
+  /** 高级生成配置 */
+  advancedConfig?: AdvancedGenerationConfig;
   /** 额外配置 */
   extra?: Record<string, any>;
 }

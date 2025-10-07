@@ -105,7 +105,8 @@ export class OpenAICompatibleProvider implements AIProvider {
     public readonly apiKey: string,
     public readonly enabled: boolean = true,
     public readonly defaultModel?: string,
-    public readonly customHeaders?: Record<string, string>
+    public readonly customHeaders?: Record<string, string>,
+    public readonly advancedConfig?: import('./base').AdvancedGenerationConfig
   ) {}
 
   /**
@@ -117,13 +118,16 @@ export class OpenAICompatibleProvider implements AIProvider {
     options?: GenerateOptions
   ): Promise<string> {
     try {
+      // 合并高级配置和选项参数
+      const mergedOptions = this.mergeGenerationOptions(options);
+      
       const messages: OpenAIMessage[] = [];
       
       // 添加系统指令
-      if (options?.systemInstruction) {
+      if (mergedOptions.systemInstruction) {
         messages.push({
           role: 'system',
-          content: options.systemInstruction,
+          content: mergedOptions.systemInstruction,
         });
       }
       
@@ -136,15 +140,15 @@ export class OpenAICompatibleProvider implements AIProvider {
       const requestBody: OpenAIRequest = {
         model: modelId,
         messages,
-        temperature: options?.temperature ?? 0.7,
-        max_tokens: options?.maxOutputTokens ?? 2048,
-        top_p: options?.topP,
+        temperature: mergedOptions.temperature ?? 0.7,
+        max_tokens: mergedOptions.maxOutputTokens ?? 2048,
+        top_p: mergedOptions.topP,
         stream: false,
       };
 
       const response = await this.makeRequest('/chat/completions', {
         method: 'POST',
-        headers: this.getHeaders(options?.customHeaders),
+        headers: this.getHeaders(mergedOptions.customHeaders),
         body: JSON.stringify(requestBody),
       });
 
@@ -178,13 +182,16 @@ export class OpenAICompatibleProvider implements AIProvider {
     options?: GenerateOptions
   ): AsyncGenerator<string, void, unknown> {
     try {
+      // 合并高级配置和选项参数
+      const mergedOptions = this.mergeGenerationOptions(options);
+      
       const messages: OpenAIMessage[] = [];
       
       // 添加系统指令
-      if (options?.systemInstruction) {
+      if (mergedOptions.systemInstruction) {
         messages.push({
           role: 'system',
-          content: options.systemInstruction,
+          content: mergedOptions.systemInstruction,
         });
       }
       
@@ -197,15 +204,15 @@ export class OpenAICompatibleProvider implements AIProvider {
       const requestBody: OpenAIRequest = {
         model: modelId,
         messages,
-        temperature: options?.temperature ?? 0.7,
-        max_tokens: options?.maxOutputTokens ?? 2048,
-        top_p: options?.topP,
+        temperature: mergedOptions.temperature ?? 0.7,
+        max_tokens: mergedOptions.maxOutputTokens ?? 2048,
+        top_p: mergedOptions.topP,
         stream: true,
       };
 
       const response = await this.makeRequest('/chat/completions', {
         method: 'POST',
-        headers: this.getHeaders(options?.customHeaders),
+        headers: this.getHeaders(mergedOptions.customHeaders),
         body: JSON.stringify(requestBody),
       });
 
@@ -363,6 +370,24 @@ export class OpenAICompatibleProvider implements AIProvider {
   }
 
   /**
+   * 合并生成选项和高级配置
+   */
+  private mergeGenerationOptions(options?: GenerateOptions): GenerateOptions {
+    const advancedConfig = this.advancedConfig || {};
+    
+    return {
+      temperature: options?.temperature ?? advancedConfig.defaultTemperature,
+      maxOutputTokens: options?.maxOutputTokens,
+      systemInstruction: options?.systemInstruction,
+      topP: options?.topP ?? advancedConfig.defaultTopP,
+      topK: options?.topK ?? advancedConfig.defaultTopK,
+      customHeaders: options?.customHeaders,
+      // OpenAI兼容提供商不支持思考功能
+      thinkingBudget: options?.thinkingBudget,
+    };
+  }
+
+  /**
    * 发起HTTP请求
    */
   private async makeRequest(endpoint: string, options: RequestInit): Promise<Response> {
@@ -501,6 +526,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     enabled?: boolean;
     defaultModel?: string;
     customHeaders?: Record<string, string>;
+    advancedConfig?: import('./base').AdvancedGenerationConfig;
   }): OpenAICompatibleProvider {
     return new OpenAICompatibleProvider(
       config.id,
@@ -510,7 +536,8 @@ export class OpenAICompatibleProvider implements AIProvider {
       config.apiKey,
       config.enabled ?? true,
       config.defaultModel,
-      config.customHeaders
+      config.customHeaders,
+      config.advancedConfig
     );
   }
 

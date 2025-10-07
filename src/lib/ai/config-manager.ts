@@ -5,7 +5,7 @@
  */
 
 import { AIProviderConfig, AIModelConfig } from './providers/base';
-import { DEFAULT_GEMINI_CONFIG } from './providers/gemini';
+import { DEFAULT_GEMINI_CONFIG, GEMINI_PROVIDER_TEMPLATES } from './providers/gemini';
 import { OPENAI_COMPATIBLE_CONFIGS } from './providers/openai-compatible';
 
 /**
@@ -462,10 +462,84 @@ export class AIConfigManager {
       warnings.push('API密钥长度可能过短');
     }
 
+    // 高级配置验证
+    if (provider.advancedConfig) {
+      const config = provider.advancedConfig;
+      
+      if (config.defaultTemperature !== undefined) {
+        if (config.defaultTemperature < 0 || config.defaultTemperature > 1) {
+          errors.push('默认温度必须在0-1之间');
+        }
+      }
+      
+      if (config.defaultTopP !== undefined) {
+        if (config.defaultTopP < 0 || config.defaultTopP > 1) {
+          errors.push('默认Top-P必须在0-1之间');
+        }
+      }
+      
+      if (config.defaultTopK !== undefined) {
+        if (config.defaultTopK < 1 || !Number.isInteger(config.defaultTopK)) {
+          errors.push('默认Top-K必须是大于0的整数');
+        }
+      }
+      
+      if (provider.type === 'gemini' && config.thinkingBudget !== undefined) {
+        if (config.thinkingBudget < -1 || !Number.isInteger(config.thinkingBudget)) {
+          errors.push('思考预算必须是-1（动态）、0（禁用）或正整数');
+        }
+      }
+      
+      if (provider.type !== 'gemini' && (config.enableDynamicThinking || config.thinkingBudget !== undefined)) {
+        warnings.push('思考功能仅在Gemini提供商中支持');
+      }
+    }
+
     return {
       valid: errors.length === 0,
       errors,
       warnings,
+    };
+  }
+
+  /**
+   * 获取所有可用的提供商模板
+   */
+  static getProviderTemplates(): Record<string, any> {
+    return {
+      gemini: GEMINI_PROVIDER_TEMPLATES,
+      openai: OPENAI_COMPATIBLE_CONFIGS,
+    };
+  }
+
+  /**
+   * 根据模板创建提供商配置
+   */
+  static createProviderFromTemplate(
+    templateType: 'gemini' | 'openai',
+    templateKey: string,
+    config: {
+      id: string;
+      apiKey: string;
+      enabled?: boolean;
+      customDisplayName?: string;
+    }
+  ): Omit<AIProviderConfig, 'createdAt' | 'updatedAt'> {
+    const templates = this.getProviderTemplates();
+    const template = templates[templateType]?.[templateKey];
+    
+    if (!template) {
+      throw new Error(`模板 ${templateType}.${templateKey} 不存在`);
+    }
+
+    const now = new Date().toISOString();
+    
+    return {
+      ...template,
+      id: config.id,
+      apiKey: config.apiKey,
+      enabled: config.enabled ?? true,
+      displayName: config.customDisplayName || template.displayName,
     };
   }
 

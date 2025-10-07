@@ -36,7 +36,8 @@ export class GeminiProvider implements AIProvider {
     public readonly apiKey: string,
     public readonly enabled: boolean = true,
     public readonly defaultModel?: string,
-    public readonly customHeaders?: Record<string, string>
+    public readonly customHeaders?: Record<string, string>,
+    public readonly advancedConfig?: import('./base').AdvancedGenerationConfig
   ) {}
 
   /**
@@ -48,10 +49,16 @@ export class GeminiProvider implements AIProvider {
     options?: GenerateOptions
   ): Promise<string> {
     try {
+      // 合并高级配置和选项参数
+      const mergedOptions = this.mergeGenerationOptions(options);
+      
       const result = await geminiGenerateContent(modelId, prompt, {
-        temperature: options?.temperature,
-        maxOutputTokens: options?.maxOutputTokens,
-        systemInstruction: options?.systemInstruction,
+        temperature: mergedOptions.temperature,
+        maxOutputTokens: mergedOptions.maxOutputTokens,
+        systemInstruction: mergedOptions.systemInstruction,
+        topP: mergedOptions.topP,
+        topK: mergedOptions.topK,
+        thinkingBudget: mergedOptions.thinkingBudget,
         apiKey: this.apiKey,
       });
       return result;
@@ -69,10 +76,16 @@ export class GeminiProvider implements AIProvider {
     options?: GenerateOptions
   ): AsyncGenerator<string, void, unknown> {
     try {
+      // 合并高级配置和选项参数
+      const mergedOptions = this.mergeGenerationOptions(options);
+      
       const stream = geminiGenerateContentStream(modelId, prompt, {
-        temperature: options?.temperature,
-        maxOutputTokens: options?.maxOutputTokens,
-        systemInstruction: options?.systemInstruction,
+        temperature: mergedOptions.temperature,
+        maxOutputTokens: mergedOptions.maxOutputTokens,
+        systemInstruction: mergedOptions.systemInstruction,
+        topP: mergedOptions.topP,
+        topK: mergedOptions.topK,
+        thinkingBudget: mergedOptions.thinkingBudget,
         apiKey: this.apiKey,
       });
 
@@ -90,7 +103,7 @@ export class GeminiProvider implements AIProvider {
   async listModels(): Promise<AIModel[]> {
     try {
       const geminiModels = await listGeminiModels(this.apiKey);
-      return geminiModels.map(this.convertGeminiModel);
+      return geminiModels.map((model) => this.convertGeminiModel(model));
     } catch (error: any) {
       throw this.handleError(error);
     }
@@ -186,6 +199,34 @@ export class GeminiProvider implements AIProvider {
   }
 
   /**
+   * 合并生成选项和高级配置
+   */
+  private mergeGenerationOptions(options?: GenerateOptions): GenerateOptions {
+    const advancedConfig = this.advancedConfig || {};
+    
+    return {
+      temperature: options?.temperature ?? advancedConfig.defaultTemperature,
+      maxOutputTokens: options?.maxOutputTokens,
+      systemInstruction: options?.systemInstruction,
+      topP: options?.topP ?? advancedConfig.defaultTopP,
+      topK: options?.topK ?? advancedConfig.defaultTopK,
+      thinkingBudget: options?.thinkingBudget ?? (
+        advancedConfig.enableDynamicThinking
+          ? -1
+          : advancedConfig.thinkingBudget
+      ),
+      customHeaders: options?.customHeaders,
+    };
+  }
+
+  /**
+   * 检查模型是否支持思考功能
+   */
+  private supportsThinking(modelId: string): boolean {
+    return modelId.includes('gemini-2.5');
+  }
+
+  /**
    * 处理错误并转换为统一的错误类型
    */
   private handleError(error: any): AIProviderError {
@@ -245,6 +286,7 @@ export class GeminiProvider implements AIProvider {
     apiKey: string;
     enabled?: boolean;
     defaultModel?: string;
+    advancedConfig?: import('./base').AdvancedGenerationConfig;
   }): GeminiProvider {
     return new GeminiProvider(
       config.id,
@@ -253,7 +295,9 @@ export class GeminiProvider implements AIProvider {
       'https://generativelanguage.googleapis.com/v1beta',
       config.apiKey,
       config.enabled ?? true,
-      config.defaultModel || 'gemini-2.5-flash'
+      config.defaultModel || 'gemini-2.5-flash',
+      undefined,
+      config.advancedConfig
     );
   }
 
@@ -284,6 +328,27 @@ export const DEFAULT_GEMINI_CONFIG = {
   enabled: true,
   defaultModel: 'gemini-2.5-flash',
 };
+
+/**
+ * 预定义的 Gemini 提供商配置模板
+ */
+export const GEMINI_PROVIDER_TEMPLATES = {
+  GOOGLE_GEMINI: {
+    id: 'google-gemini',
+    name: 'google-gemini',
+    displayName: 'Google Gemini',
+    type: 'gemini' as const,
+    apiUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    enabled: true,
+    defaultModel: 'gemini-2.5-flash',
+    description: 'Google 官方 Gemini AI 服务',
+  },
+} as const;
+
+/**
+ * Google Gemini 提供商模板配置（向后兼容）
+ */
+export const GOOGLE_GEMINI_TEMPLATE = GEMINI_PROVIDER_TEMPLATES.GOOGLE_GEMINI;
 
 /**
  * 常用的Gemini模型配置

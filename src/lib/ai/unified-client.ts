@@ -465,7 +465,8 @@ export class UnifiedAIClient {
           config.apiKey,
           config.enabled,
           config.defaultModel,
-          config.customHeaders
+          config.customHeaders,
+          config.advancedConfig
         );
       
       case 'openai':
@@ -479,7 +480,8 @@ export class UnifiedAIClient {
           config.apiKey,
           config.enabled,
           config.defaultModel,
-          config.customHeaders
+          config.customHeaders,
+          config.advancedConfig
         );
       
       default:
