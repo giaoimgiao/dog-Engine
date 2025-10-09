@@ -3,6 +3,7 @@
 import type { Character, Chapter } from '@/lib/types';
 import { useState } from 'react';
 import { generateUUID } from '@/lib/utils';
+import { useAI } from '@/hooks/useAI';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
@@ -45,6 +46,9 @@ export default function CharacterCardManager({ characters, setCharacters, chapte
   const [debugViewOnly, setDebugViewOnly] = useState(false);
   const [noLengthLimit, setNoLengthLimit] = useState(false);
   const [rawOutput, setRawOutput] = useState<string>('');
+
+  // 使用统一AI调用
+  const { generateContent: aiGenerateContent, canGenerate } = useAI();
 
   const resetForm = () => {
     setName('');
@@ -96,6 +100,10 @@ export default function CharacterCardManager({ characters, setCharacters, chapte
 
   const handleAiExtract = async () => {
     if (selectedChapterIds.length === 0) return;
+    if (!canGenerate) {
+      // 这里可以添加toast提示，但需要先导入useToast
+      return;
+    }
     setIsExtracting(true);
     try {
       const selected = chapters.filter(ch => selectedChapterIds.includes(ch.id));
@@ -115,14 +123,12 @@ export default function CharacterCardManager({ characters, setCharacters, chapte
         })();
         joined = compact.length > LIMIT ? compact.slice(0, LIMIT) : compact;
       }
-      const system = '你是资深的小说设定分析师。基于给定正文，抽取“角色卡”。每个角色包含：name（不超过10字），description（150-300字，包含身份、性格、动机与与主角关系）。以JSON数组返回，每项为{"name":"...","description":"..."}，不要输出其他内容。';
-      const { getDefaultModel, generateContent } = await import('@/lib/gemini-client');
-      const model = getDefaultModel();
+      const system = '你是资深的小说设定分析师。基于给定正文，抽取"角色卡"。每个角色包含：name（不超过10字），description（150-300字，包含身份、性格、动机与与主角关系）。以JSON数组返回，每项为{"name":"...","description":"..."}，不要输出其他内容。';
       const opts = { systemInstruction: system, maxOutputTokens: 2048 } as const;
       if (debugViewOnly) {
         setRawOutput(`>>> INPUT LENGTH: ${joined.length}\n>>> SYSTEM LENGTH: ${system.length}\n>>> OPTIONS: ${JSON.stringify(opts)}\n\n`);
       }
-      const output = await generateContent(model, joined, opts);
+      const output = await aiGenerateContent(joined, opts);
 
       const isDebug = () => {
         if (typeof window === 'undefined') return false;

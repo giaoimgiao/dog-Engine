@@ -11,10 +11,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { Loader2, CheckCircle, XCircle, FileScan, Copy, BadgeHelp, WandSparkles } from 'lucide-react';
 import type { Book, Chapter, ReviewResult } from '@/lib/types';
-import { listGeminiModels, getDefaultModel, generateContent } from '@/lib/gemini-client';
 import { useToast } from '@/hooks/use-toast';
 import copy from 'copy-to-clipboard';
 import { Badge } from '@/components/ui/badge';
+import { useAI } from '@/hooks/useAI';
+import { useAIConfig } from '@/hooks/useAIConfig';
+import ModelSelector from '@/components/ModelSelector';
+import { AIProviderSettings } from '@/components/AIProviderSettings';
 
 const MAX_CHAR_LIMIT = 10000;
 
@@ -28,8 +31,10 @@ export default function ReviewPage() {
   
   const [isLoading, setIsLoading] = useState(false);
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
-  const [models, setModels] = useState<{ id: string; displayName: string }[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('');
+
+  // 使用统一AI配置和调用
+  const { selectedProviderId, selectedModelId, setSelectedProvider, setSelectedModel } = useAIConfig();
+  const { generateContent: aiGenerateContent, canGenerate } = useAI();
 
   const selectedBook = useMemo(() => books.find(b => b.id === selectedBookId), [books, selectedBookId]);
   const selectedChapter = useMemo(() => selectedBook?.chapters.find(c => c.id === selectedChapterId), [selectedBook, selectedChapterId]);
@@ -38,20 +43,6 @@ export default function ReviewPage() {
     if (selectedChapter) return selectedChapter.content;
     return pastedText;
   }, [selectedChapter, pastedText]);
-
-  // load models on mount
-  useMemo(() => {
-    (async () => {
-      try {
-        const list = await listGeminiModels();
-        setModels(list.map(m => ({ id: m.id, displayName: m.displayName })));
-        setSelectedModel(getDefaultModel());
-      } catch (e) {
-        // ignore; models will remain empty, we keep default
-        setSelectedModel(getDefaultModel());
-      }
-    })();
-  }, []);
 
   const handleBookSelect = (bookId: string) => {
     setSelectedBookId(bookId);
@@ -81,13 +72,27 @@ export default function ReviewPage() {
       });
       return;
     }
+
+    if (!canGenerate) {
+      toast({
+        title: '请先配置AI提供商',
+        description: '请点击右上角AI设置按钮配置您的AI提供商',
+        variant: 'destructive',
+      });
+      return;
+    }
     
     setIsLoading(true);
     setReviewResult(null);
 
-  try {
+    try {
       const systemInstruction = '你是一个专业的网文编辑，在你的眼中，只有过稿和拒稿。遵循商业网文的审稿标准，基于提供的稿件严格给出结论。输出严格的JSON对象，不要任何解释或附加文本：{"decision":"过稿或拒稿","reason":"详细理由（若过稿只说优点；若拒稿只说问题与修改方向）"}';
-      const output = await generateContent(selectedModel || getDefaultModel(), `【稿件】\n${manuscript}` , { systemInstruction, maxOutputTokens: 1024, temperature: 0.2 });
+      const output = await aiGenerateContent(`【稿件】\n${manuscript}`, {
+        systemInstruction,
+        maxOutputTokens: 1024,
+        temperature: 0.2
+      });
+      
       let parsed: any;
       try {
         parsed = JSON.parse(output);
@@ -98,11 +103,11 @@ export default function ReviewPage() {
       const decision = String(parsed.decision || '').includes('过') ? '过稿' : '拒稿';
       const reason = String(parsed.reason || '').trim() || output.trim();
       setReviewResult({ decision: decision as any, reason });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Review failed:", error);
       toast({
         title: '审稿失败',
-        description: 'AI 在审稿时遇到问题，请稍后再试。',
+        description: error.message || 'AI 在审稿时遇到问题，请稍后再试。',
         variant: 'destructive',
       });
     } finally {
@@ -192,24 +197,27 @@ export default function ReviewPage() {
                   </div>
                 </TabsContent>
               </Tabs>
-              {/* Model selection */}
-              <div className="grid grid-cols-1 gap-2">
-                 <div className="space-y-2">
-                   <Label htmlFor="model-select">选择模型</Label>
-                   <Select onValueChange={setSelectedModel} value={selectedModel}>
-                      <SelectTrigger id="model-select">
-                        <SelectValue placeholder="选择一个模型" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(models.length > 0 ? models : [
-                          { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
-                          { id: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
-                        ]).map(m => (
-                          <SelectItem key={m.id} value={m.id}>{m.displayName || m.id}</SelectItem>
-                        ))}
-                      </SelectContent>
-                   </Select>
-                 </div>
+              {/* AI模型选择 */}
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <Label>AI模型选择</Label>
+                  <AIProviderSettings variant="ghost" showStatus={true} />
+                </div>
+                <ModelSelector
+                  selectedProviderId={selectedProviderId}
+                  selectedModelId={selectedModelId}
+                  onProviderChange={setSelectedProvider}
+                  onModelChange={setSelectedModel}
+                  showLabels={false}
+                  showModelInfo={false}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {canGenerate ? (
+                    <span className="text-green-600 dark:text-green-400">✓ AI配置已就绪</span>
+                  ) : (
+                    <span className="text-amber-600 dark:text-amber-400">⚠ 请先配置AI提供商</span>
+                  )}
+                </p>
               </div>
               
               <Button onClick={handleReview} disabled={isLoading || !manuscript.trim()} className="w-full text-lg py-6 font-headline">

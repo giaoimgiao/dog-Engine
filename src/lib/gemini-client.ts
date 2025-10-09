@@ -23,6 +23,9 @@ export interface GeminiGenerateRequest {
         maxOutputTokens?: number;
         topP?: number;
         topK?: number;
+        thinkingConfig?: {
+            thinkingBudget?: number;
+        };
     };
     safetySettings?: Array<{
         category: string;
@@ -156,7 +159,7 @@ export async function listGeminiModels(apiKey?: string): Promise<GeminiModel[]> 
         console.error('Failed to fetch models:', error);
         // 返回默认模型列表作为fallback
         return [
-            { id: 'ggemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite', displayName: 'gemini-2.5-flash-lite' },
+            { id: 'gemini-2.5-flash-lite', name: 'gemini-2.5-flash-lite', displayName: 'Gemini 2.5 Flash Lite' },
             { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
             { id: 'gemini-2.5-flash', name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
             { id: 'gemini-1.5-pro', name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro' },
@@ -174,6 +177,9 @@ export async function generateContent(
         temperature?: number;
         maxOutputTokens?: number;
         systemInstruction?: string;
+        topP?: number;
+        topK?: number;
+        thinkingBudget?: number;
         apiKey?: string;
     }
 ): Promise<string> {
@@ -198,12 +204,30 @@ export async function generateContent(
         parts: [{ text: prompt }],
     });
 
+    // 构建生成配置
+    const generationConfig: any = {
+        temperature: options?.temperature ?? 0.7,
+        maxOutputTokens: options?.maxOutputTokens ?? 2048,
+    };
+
+    // 添加topP和topK参数（如果提供）
+    if (options?.topP !== undefined) {
+        generationConfig.topP = options.topP;
+    }
+    if (options?.topK !== undefined) {
+        generationConfig.topK = options.topK;
+    }
+
+    // 添加思考配置（仅Gemini 2.5系列支持）
+    if (options?.thinkingBudget !== undefined && modelId.includes('gemini-2.5')) {
+        generationConfig.thinkingConfig = {
+            thinkingBudget: options.thinkingBudget
+        };
+    }
+
     const requestBody: GeminiGenerateRequest = {
         contents: messages,
-        generationConfig: {
-            temperature: options?.temperature ?? 0.7,
-            maxOutputTokens: options?.maxOutputTokens ?? 2048,
-        },
+        generationConfig,
         safetySettings: buildSafetySettings(),
     };
 
@@ -413,6 +437,9 @@ export async function* generateContentStream(
         temperature?: number;
         maxOutputTokens?: number;
         systemInstruction?: string;
+        topP?: number;
+        topK?: number;
+        thinkingBudget?: number;
         apiKey?: string;
     }
 ): AsyncGenerator<string, void, unknown> {
@@ -435,12 +462,30 @@ export async function* generateContentStream(
         parts: [{ text: prompt }],
     });
 
+    // 构建生成配置
+    const generationConfig: any = {
+        temperature: options?.temperature ?? 0.7,
+        maxOutputTokens: options?.maxOutputTokens ?? 2048,
+    };
+
+    // 添加topP和topK参数（如果提供）
+    if (options?.topP !== undefined) {
+        generationConfig.topP = options.topP;
+    }
+    if (options?.topK !== undefined) {
+        generationConfig.topK = options.topK;
+    }
+
+    // 添加思考配置（仅Gemini 2.5系列支持）
+    if (options?.thinkingBudget !== undefined && modelId.includes('gemini-2.5')) {
+        generationConfig.thinkingConfig = {
+            thinkingBudget: options.thinkingBudget
+        };
+    }
+
     const requestBody: GeminiGenerateRequest = {
         contents: messages,
-        generationConfig: {
-            temperature: options?.temperature ?? 0.7,
-            maxOutputTokens: options?.maxOutputTokens ?? 2048,
-        },
+        generationConfig,
         safetySettings: buildSafetySettings(),
     };
 
