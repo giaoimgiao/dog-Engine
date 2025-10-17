@@ -39,6 +39,7 @@ Dog写作引擎是一款专为网文作者打造的**开源全栈创作平台**�
 - 📱 **移动端优化** - 响应式图墙布局，完美适配各种屏幕尺寸
 - 💾 **多级缓存** - 智能缓存策略，减少90%重复请求
 - 📊 **使用统计** - 实时追踪Token消耗、响应时间、提供商使用情况
+<img width="1920" height="1020" alt="QQ20251017-193128" src="https://github.com/user-attachments/assets/821eb40a-e768-4b56-a290-dbce45815c29" />
 
 ---
 
@@ -60,6 +61,7 @@ Dog写作引擎是一款专为网文作者打造的**开源全栈创作平台**�
 - **多行输入** - Textarea支持，Enter换行，Ctrl+Enter发送
 - **上下文保持** - 完整的对话历史管理，AI记住所有上下文
 - **快捷键支持** - Esc取消编辑，Ctrl+Enter保存
+<img width="1799" height="854" alt="QQ20251016-204546" src="https://github.com/user-attachments/assets/36dbd75b-0812-4fef-8953-08ce3e049465" />
 
 #### 🔧 技术实现
 ```typescript
@@ -168,7 +170,8 @@ if (cached && Date.now() < cached.timestamp + cached.expiry) {
 - 节奏分析
 
 ### 5. 🔍 AI率检测系统（逆向工程）
-![Uploading QQ20251017-193331.png…]()
+
+<img width="1919" height="930" alt="QQ20251017-193331" src="https://github.com/user-attachments/assets/b1f3fb93-fc35-4f04-b1d5-6626eaa5d7fa" />
 
 #### 核心突破
 - **逆向ailv.run API** - 通过抓包分析，完整复现AI检测服务
