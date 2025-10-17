@@ -20,6 +20,7 @@
 </div>
 
 ---
+<img width="1907" height="921" alt="QQ20251017-193245" src="https://github.com/user-attachments/assets/78cd6370-2653-43a5-a7c8-044d2ba6d896" />
 
 ## 📖 项目简介
 
@@ -167,6 +168,7 @@ if (cached && Date.now() < cached.timestamp + cached.expiry) {
 - 节奏分析
 
 ### 5. 🔍 AI率检测系统（逆向工程）
+![Uploading QQ20251017-193331.png…]()
 
 #### 核心突破
 - **逆向ailv.run API** - 通过抓包分析，完整复现AI检测服务
