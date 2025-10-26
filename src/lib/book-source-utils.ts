@@ -2,10 +2,14 @@
 import type { BookSource } from './types';
 import { VM } from 'vm2';
 import * as cheerio from 'cheerio';
+import { getAuth } from './book-source-auth';
 
 // 重新导出书源存储函数以保持向后兼容
 export { getBookSources, saveBookSources } from './book-source-storage';
 export { parseRuleWithCssJs } from './book-source-rule-parser';
+
+// 全局变量存储，用于 java.put/get 跨sandbox共享
+const globalJavaVariables = new Map<string, any>();
 
 const getHostsFromComment = (comment: string = '', jsLib: string = '', loginUrl: string = ''): string[] => {
     const combinedScript = `${comment}\n${jsLib}\n${loginUrl}`;
@@ -27,7 +31,7 @@ const getHostsFromComment = (comment: string = '', jsLib: string = '', loginUrl:
         try {
             // 提取所有单引号包裹的字符串
             const base64Strings = match[1].match(/'([^']+)'/g) || [];
-            // console.log(`[getHostsFromComment] 找到 ${base64Strings.length} 个 encodedEndpoints`);
+            console.log(`[getHostsFromComment] 找到 ${base64Strings.length} 个 encodedEndpoints`);
             
             const decodedHosts = base64Strings
                 .map(s => s.replace(/'/g, '').trim())
@@ -61,44 +65,191 @@ const getHostsFromComment = (comment: string = '', jsLib: string = '', loginUrl:
 };
 
 
-const createSandbox = (source: BookSource | undefined, key?: string, page?: number, result?: any, overrideBaseUrl?: string) => {
-    const variableMap: Record<string, any> = {
-        _open_argument: source?.loginUi || '{}'
-    };
-
+const createSandbox = (source: BookSource | undefined, key?: string, page?: number, result?: any, overrideBaseUrl?: string, sharedVariables?: Record<string, any>) => {
     const hosts = getHostsFromComment(source?.comment, source?.jsLib, source?.loginUrl);
     // console.log(`[createSandbox] 为书源 "${source?.name}" 提取到 ${hosts.length} 个服务器:`, hosts.length > 0 ? hosts[0] : '无');
+    // console.log(`[createSandbox] source.jsLib存在: ${!!source?.jsLib}, 长度: ${source?.jsLib?.length || 0}`);
+    
+    // 初始化运行时配置：如果没有保存的变量，使用默认值
+    const defaultConfig = {
+        server: hosts.length > 0 ? hosts[0] : '',
+        media: '小说',
+        tone_id: '默认音色',
+        source: '全部',
+        source_type: '男频'
+    };
+    
+    const variableMap: Record<string, any> = {
+        _open_argument: (source as any)?.variable || JSON.stringify(defaultConfig),
+        ...(sharedVariables || {})  // 合并共享变量
+    };
+    
+    // console.log(`[createSandbox] 初始化变量:`, variableMap._open_argument);
     
     const sandbox = {
         java: {
             ajax: (url: string) => {
-                // 🔧 同步网络请求的 polyfill 使用 child_process.execSync
-                // console.log(`[Mock] java.ajax called: ${url.substring(0, 200)}`);
+                // 🔧 同步网络请求 - 使用 sync-fetch 或 deasync
+                console.log(`[Mock] java.ajax called: ${url.substring(0, 200)}`);
                 try {
                     if (typeof window === 'undefined') {
-                        // 服务端：使用 curl 进行同步请求
-                        const { execSync } = require('child_process');
-                        // 尝试为请求自动带上 Referer 及常见头
-                        let referer = '';
                         let actualUrl = String(url);
+                        let options: any = {};
                         
                         // 处理 Legado 格式: URL,{options}
                         if (actualUrl.includes(',{')) {
                             const parts = actualUrl.split(',{');
                             actualUrl = parts[0];
-                            // console.log(`[Mock] java.ajax: 提取URL: ${actualUrl}`);
+                            try {
+                                const optsJson = '{' + parts.slice(1).join(',{');
+                                options = JSON.parse(optsJson);
+                            } catch (e) {
+                                options = {};
+                            }
                         }
                         
+                        // 合并 headers（包含从 auth 注入的 cookie/qtoken）
+                        let headers: Record<string, string> = {
+                            'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
+                            'Accept': 'application/json,text/plain,*/*',
+                            'versiontype': 'reading',
+                        };
+                        if (options && options.headers && typeof options.headers === 'object') {
+                            for (const k of Object.keys(options.headers)) {
+                                headers[k] = String(options.headers[k]);
+                            }
+                        }
+                        
+                        // 如果未显式传 Cookie，尝试从 auth 中注入
+                        try {
+                            if (source?.id) {
+                                const auth = getAuthSync(source.id);
+                                const cookieFromAuth = getCookieStringForUrl(auth, actualUrl);
+                                if (cookieFromAuth) {
+                                    if (!headers['Cookie'] && !headers['cookie']) headers['Cookie'] = cookieFromAuth;
+                                }
+                            }
+                        } catch {}
+                        
+                        // 使用 child_process.spawnSync 执行 curl（更可靠）
+                        const { spawnSync } = require('child_process');
+                        
+                        const args = [
+                            '-s',  // silent
+                            '-L',  // follow redirects
+                            '-m', '8',  // max time 8 seconds
+                        ];
+                        // 追加常用 headers
+                        let referer = '';
                         try { const u = new URL(actualUrl); referer = `${u.protocol}//${u.host}/`; } catch {}
-                        const headerParts = [
-                            '-H "User-Agent: Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36"',
-                            '-H "Accept: application/json,text/plain,*/*"',
-                            '-H "versiontype: reading"',
-                            referer ? `-H "Referer: ${referer}"` : ''
-                        ].filter(Boolean).join(' ');
-                        const command = `curl -s -L ${headerParts} "${actualUrl}"`;
-                        const responseData = execSync(command, { encoding: 'utf-8', timeout: 10000 });
-                        // console.log(`[Mock] java.ajax succeeded, response length: ${responseData.length}`);
+                        if (!headers['Accept']) headers['Accept'] = 'application/json,text/plain,*/*';
+                        if (!headers['User-Agent']) headers['User-Agent'] = 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36';
+                        if (!headers['versiontype']) headers['versiontype'] = 'reading';
+                        if (referer && !headers['Referer']) headers['Referer'] = referer;
+                        
+                        // POST 自动补充 content-type
+                        const method = (options && typeof options.method === 'string') ? options.method.toUpperCase() : 'GET';
+                        if (method === 'POST') {
+                            const hasCT = Object.keys(headers).some(k => k.toLowerCase() === 'content-type');
+                            if (!hasCT && typeof options.body === 'string') {
+                                headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+                            }
+                        }
+                        // 追加 headers
+                        Object.keys(headers).forEach((k) => {
+                            if (headers[k]) {
+                                args.push('-H', `${k}: ${headers[k]}`);
+                            }
+                        });
+                        
+                        // 支持 POST 与 body
+                        if (method === 'POST') {
+                            args.push('-X', 'POST');
+                            if (typeof options.body === 'string' && options.body.length > 0) {
+                                args.push('--data', options.body);
+                            } else if (options.body && typeof options.body === 'object') {
+                                try { args.push('--data', new URLSearchParams(options.body).toString()); } catch {}
+                            }
+                        }
+                        args.push(actualUrl);
+                        
+                        const result = spawnSync('curl', args, {
+                            encoding: 'utf-8',
+                            timeout: 10000,
+                            maxBuffer: 10 * 1024 * 1024  // 10MB
+                        });
+                        
+                        if (result.error) {
+                            console.warn(`[Mock] java.ajax curl not available:`, result.error.message);
+                            console.log(`[Mock] java.ajax falling back to Node.js https module...`);
+                            
+                            // Fallback: 使用 deasync 实现真正的同步请求
+                            try {
+                                console.log(`[Mock] java.ajax trying deasync fallback...`);
+                                
+                                // 方法1: 尝试使用 deasync（如果已安装）
+                                try {
+                                    const deasync = require('deasync');
+                                    let done = false;
+                                    let responseData = '';
+                                    let requestError: any = null;
+                                    
+                                    fetch(actualUrl, {
+                                        headers: {
+                                            'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
+                                            'Accept': 'application/json,text/plain,*/*',
+                                            'versiontype': 'reading'
+                                        }
+                                    })
+                                    .then(res => res.text())
+                                    .then(text => {
+                                        responseData = text;
+                                        done = true;
+                                    })
+                                    .catch(err => {
+                                        requestError = err;
+                                        done = true;
+                                    });
+                                    
+                                    // 同步等待
+                                    deasync.loopWhile(() => !done);
+                                    
+                                    if (requestError) {
+                                        throw requestError;
+                                    }
+                                    
+                                    console.log(`[Mock] java.ajax (deasync) succeeded, response length: ${responseData.length}`);
+                                    return responseData;
+                                } catch (deasyncError: any) {
+                                    if (deasyncError.code === 'MODULE_NOT_FOUND') {
+                                        console.log(`[Mock] deasync not installed, using simple fallback...`);
+                                    } else {
+                                        console.error(`[Mock] deasync error:`, deasyncError.message);
+                                    }
+                                    
+                                    // 方法2: 返回空数据，让书源使用默认分类
+                                    console.warn(`[Mock] java.ajax 无法同步执行，返回空数据`);
+                                    return JSON.stringify({ data: [] });
+                                }
+                            } catch (fallbackError: any) {
+                                console.error(`[Mock] java.ajax fallback failed:`, fallbackError.message);
+                                return JSON.stringify({ data: [] });
+                            }
+                        }
+                        
+                        if (result.status !== 0) {
+                            console.error(`[Mock] java.ajax curl exit code:`, result.status, result.stderr);
+                            return JSON.stringify({ data: [] });
+                        }
+                        
+                        const responseData = result.stdout || '';
+                        // 精简日志：只在失败或异常时输出
+                        if (result.stderr || responseData.length === 0 || (responseData.trim().startsWith('<') && responseData.includes('<html'))) {
+                            console.log(`[Mock] java.ajax: ${actualUrl.substring(0,80)}... [${method}] 响应:${responseData.length}字节`);
+                            if (responseData.trim().startsWith('<') && responseData.includes('<html')) {
+                                console.error(`  ❌ 返回HTML错误页`);
+                            }
+                        }
                         return responseData;
                     } else {
                         // 客户端：无法同步请求
@@ -109,6 +260,12 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
                     console.error(`[Mock] java.ajax failed:`, e);
                 return JSON.stringify({ data: [] });
                 }
+            },
+            put: (key: string, value: any) => { 
+                variableMap[key] = value;
+                // 保存到全局存储，让不同sandbox能共享
+                globalJavaVariables.set(key, value);
+                // console.log(`[Mock] ✓ java.put: ${key} = ${String(value).substring(0, 100)}`);
             },
             get: (arg: string, _opts?: any) => {
                 // Overloaded: when arg looks like URL → do HTTP GET and return { body(), header(name) }
@@ -158,13 +315,41 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
                     // HTTP 分支失败，返回空响应对象
                     return { body: () => '', header: (_: string) => '' };
                 }
-                // key-value getter
-                return variableMap[arg as any];
+                // key-value getter - 优先从全局存储读取
+                const value = globalJavaVariables.get(arg) ?? variableMap[arg as any];
+                // console.log(`[Mock] java.get: ${arg} = ${String(value).substring(0, 100)}`);
+                return value;
             },
-            put: (key: string, value: any) => { variableMap[key] = value; },
             base64Encode: (str: string) => Buffer.from(str).toString('base64'),
             base64Decode: (str: string) => Buffer.from(str, 'base64').toString('utf-8'),
-            hexDecodeToString: (hex: string) => Buffer.from(hex, 'hex').toString('utf-8'),
+            hexDecodeToString: (input: string) => {
+                const inputStr = String(input || '');
+                    // console.log(`[hexDecodeToString] 输入: ${inputStr.substring(0, 100)}`);
+                
+                // 大灰狼书源场景：data URL已经解码过了，传入的是UTF-8字符串
+                // 格式：7046844484302144036大灰狼融合4小说大灰狼融合4第1章...
+                // 如果包含中文或其他非ASCII字符，直接返回
+                if (/[^\x00-\x7F]/.test(inputStr)) {
+                    // console.log(`[hexDecodeToString] ✓ 检测到非ASCII字符（包含中文），直接返回`);
+                    return inputStr;
+                }
+                
+                // 只有纯hex字符串才尝试hex解码
+                if (/^[0-9a-fA-F]+$/.test(inputStr) && inputStr.length % 2 === 0) {
+                    try {
+                        const decoded = Buffer.from(inputStr, 'hex').toString('utf-8');
+                        // console.log(`[hexDecodeToString] ✓ Hex解码成功: ${inputStr.substring(0, 20)}... -> ${decoded.substring(0, 50)}...`);
+                        return decoded;
+                    } catch (e) {
+                        // console.warn(`[hexDecodeToString] ✗ Hex解码失败，返回原字符串`);
+                        return inputStr;
+                    }
+                }
+                
+                // 其他情况直接返回
+                // console.log(`[hexDecodeToString] ✓ 非hex格式，直接返回`);
+                return inputStr;
+            },
             createSymmetricCrypto: (algorithm: string, key: string, iv: string) => {
                 // Support DES/CBC/PKCS5Padding decrypt used in 晋江
                 // console.log(`[Mock] java.createSymmetricCrypto: ${algorithm}`);
@@ -240,10 +425,10 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
                 // console.log(`[Mock] java.log:`, msg);
             },
             toast: (msg: string) => {
-                // console.log(`[Mock] java.toast: ${msg}`);
+                console.log(`[Mock] java.toast: ${msg}`);
             },
             longToast: (msg: string) => {
-                // console.log(`[Mock] java.longToast: ${msg}`);
+                console.log(`[Mock] java.longToast: ${msg}`);
             },
             androidId: () => {
                 // Mock返回null，表示不是Android环境
@@ -254,8 +439,15 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
                 return null;
             },
             getCookie: (domain: string) => {
-                // console.log(`[Mock] java.getCookie: ${domain}`);
-                return '';
+                try {
+                    const auth = source?.id ? getAuthSync(source.id) : null;
+                    const cookie = getCookieStringForUrl(auth, domain);
+                    console.log(`[Mock] java.getCookie: domain="${domain}", sourceId="${source?.id}", cookie="${cookie.substring(0, 100)}${cookie.length > 100 ? '...' : ''}"`);
+                    return cookie || '';
+                } catch (e: any) {
+                    console.error(`[Mock] java.getCookie error:`, e.message);
+                    return '';
+                }
             },
             startBrowser: (url: string, title: string) => {
                 // console.log(`[Mock] java.startBrowser: ${url}, title: ${title}`);
@@ -264,10 +456,46 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
                 // console.log(`[Mock] java.startBrowserAwait: ${url}, title: ${title}`);
             },
         },
+        // 安全 eval：
+        // - 若传入是正文/HTML/纯文本（包含大量非ASCII或HTML标签），直接原样返回，避免误清空
+        // - 其它短小的JS表达式，使用独立vm沙箱限时执行，并返回其结果字符串
+        eval: (code: any) => {
+            try {
+                const str = typeof code === 'string' ? code : String(code ?? '');
+                // 判定为“很可能是正文/HTML/长文本”
+                const hasHtml = /<[^>]+>/.test(str);
+                const nonAsciiRatio = (() => {
+                    const len = str.length || 1; let nonAscii = 0; for (let i = 0; i < Math.min(len, 2000); i++) { if (str.charCodeAt(i) > 127) nonAscii++; }
+                    return nonAscii / Math.min(len, 2000);
+                })();
+                const isLong = str.length > 400; // 正文通常较长
+                if (hasHtml || nonAsciiRatio > 0.1 || isLong) {
+                    return str; // 视为正文/HTML，不执行
+                }
+                // 对短JS尝试安全执行
+                try {
+                    const { VM } = require('vm2');
+                    const miniVm = new VM({ timeout: 500, sandbox: {} });
+                    const result = miniVm.run(str);
+                    return typeof result === 'string' ? result : String(result ?? '');
+                } catch {
+                    return str; // 执行失败则原样返回
+                }
+            } catch {
+                return code;
+            }
+        },
         cookie: {
             getCookie: (url: string) => {
-                // console.log(`[Mock] cookie.getCookie: ${url}`);
-                return '';
+                try {
+                    const auth = source?.id ? getAuthSync(source.id) : null;
+                    const cookie = getCookieStringForUrl(auth, url);
+                    console.log(`[Mock] cookie.getCookie: url="${url}", sourceId="${source?.id}", cookie="${cookie.substring(0, 100)}${cookie.length > 100 ? '...' : ''}"`);
+                    return cookie || '';
+                } catch (e: any) {
+                    console.error(`[Mock] cookie.getCookie error:`, e.message);
+                    return '';
+                }
             }
         },
         cache: {
@@ -382,12 +610,13 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
             const defaults = {
                 "media": "小说",
                 "server": hosts.length > 0 ? hosts[0] : "",
-                "source": source?.name,
+                "source": "番茄",  // 默认来源为"番茄"，而不是书源名称
+                "source_type": "男频",
             };
             const finalArgs = { ...defaults, ...args };
             
             if (key === 'server') {
-                // console.log(`[getArguments] 返回 server = "${finalArgs[key]}" (来自: ${args.server ? '用户配置' : '默认值'})`);
+                console.log(`[getArguments] 返回 server = "${finalArgs[key]}" (来自: ${args.server ? '用户配置' : '默认值'})`);
             }
             
             return key ? finalArgs[key] : finalArgs;
@@ -402,31 +631,205 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
         Array: Array,
     };
     
+    // 加载jsLib中的函数到sandbox - 需要在同一个VM实例中
     if(source?.jsLib) {
-        const vm = new VM({ sandbox });
-        vm.run(source.jsLib);
+        // console.log(`[createSandbox] 加载jsLib，长度: ${source.jsLib.length}`);
+        try {
+            // 创建VM并运行jsLib
+            const libVm = new VM({ sandbox, eval: true });
+            libVm.run(source.jsLib);
+            
+            // VM运行后，函数会被定义到sandbox中
+            // 检查常用函数是否加载成功
+            const commonFuncs = ['decrypt', 'cleanHTML', 'getComments', 'getArguments'];
+            let loadedCount = 0;
+            const sandboxAny = sandbox as any;
+            commonFuncs.forEach(funcName => {
+                if (typeof sandboxAny[funcName] === 'function') {
+                    // console.log(`[createSandbox] ✓ 函数 ${funcName} 已加载`);
+                    loadedCount++;
+                } else {
+                    console.warn(`[createSandbox] ✗ 函数 ${funcName} 未找到`);
+                }
+            });
+            // console.log(`[createSandbox] jsLib加载完成，成功加载 ${loadedCount}/${commonFuncs.length} 个常用函数`);
+        } catch (e: any) {
+            console.error(`[createSandbox] ❌ jsLib加载失败:`, e.message);
+            console.error(`  - 错误堆栈:`, e.stack?.split('\n').slice(0, 3).join('\n'));
+        }
+    }
+    
+    // Fallback：若关键函数仍不存在，提供默认实现，避免章节JS报错
+    const sx: any = sandbox as any;
+    if (typeof sx.decrypt !== 'function') {
+        sx.decrypt = (text: string) => String(text ?? '');
+        // console.log('[createSandbox] ⚙️ 注入默认 decrypt');
+    }
+    if (typeof sx.cleanHTML !== 'function') {
+        sx.cleanHTML = (html: string) => {
+            try {
+                const noHeader = String(html || '').replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '');
+                const noTags = noHeader.replace(/<(?!\/?p\b|\/?img\b)[^>]+>/gi, '');
+                return noTags.replace(/<\/?p[^>]*>/g, '\n').replace(/\n+/g, '\n').trim();
+            } catch {
+                return String(html || '');
+            }
+        };
+        // console.log('[createSandbox] ⚙️ 注入默认 cleanHTML');
+    }
+    if (typeof sx.getComments !== 'function') {
+        sx.getComments = (content: string) => String(content ?? '');
+        // console.log('[createSandbox] ⚙️ 注入默认 getComments');
     }
     
     return sandbox;
 };
 
-export async function evaluateJs(script: string, context: { key?: string, page?: number, source?: BookSource, result?: any, cheerioElements?: any, baseUrl?: string }): Promise<string> {
+// 同步读取 auth（阻塞式）用于在同步的 java.ajax/cookie.getCookie 中使用
+function getAuthSync(sourceId: string) {
+    try {
+        const fs = require('fs');
+        const path = require('path');
+        const isVercel = !!process.env.VERCEL;
+        const dataFilePath = isVercel
+          ? path.join('/tmp', 'book_source_auth.json')
+          : path.join(process.cwd(), 'book_source_auth.json');
+        let txt = '[]';
+        try { txt = fs.readFileSync(dataFilePath, 'utf-8'); } catch {}
+        let list = [] as any[];
+        try { list = JSON.parse(txt); } catch { list = []; }
+        return list.find((a: any) => a.sourceId === sourceId) || null;
+    } catch { return null; }
+}
+
+// 根据 URL 或域名拼接 Cookie（支持自定义 tokens.key -> qttoken）
+function getCookieStringForUrl(auth: any, urlOrDomain: string): string {
+    try {
+        if (!auth) {
+            console.log(`[getCookieStringForUrl] ✗ auth为空`);
+            return '';
+        }
+        
+        let hostname = '';
+        try { const u = new URL(urlOrDomain); hostname = u.origin; } catch { hostname = urlOrDomain; }
+        // console.log(`[getCookieStringForUrl] 查找cookie，url="${urlOrDomain}", hostname="${hostname}"`);
+        
+        const cookiesMap = auth.cookies || {};
+        // console.log(`[getCookieStringForUrl] cookiesMap keys:`, Object.keys(cookiesMap));
+        
+        let cookie = cookiesMap[hostname] || cookiesMap[(() => { try { return new URL(urlOrDomain).host; } catch { return ''; } })()] || cookiesMap[(() => { try { return new URL(urlOrDomain).hostname; } catch { return ''; } })()] || '';
+        // console.log(`[getCookieStringForUrl] 从cookiesMap获取的cookie: ${cookie ? cookie.substring(0, 50) + '...' : '(空)'}`);
+        
+        // 合并番茄/字节系登录cookie（若目标是大灰狼API，通常需要这些）
+        try {
+            const isQingtianApi = /api\.langge\.cf|langge\./.test(hostname);
+            if (isQingtianApi) {
+                const extraDomains = [
+                    'https://fanqienovel.com',
+                    'fanqienovel.com',
+                    'https://www.fanqienovel.com',
+                    'snssdk.com',
+                    'https://snssdk.com'
+                ];
+                const extras: string[] = [];
+                for (const d of extraDomains) {
+                    const c = cookiesMap[d];
+                    if (c && c.trim()) extras.push(c);
+                }
+                if (extras.length > 0) {
+                    cookie = [cookie, ...extras].filter(Boolean).join('; ');
+                    // console.log(`[getCookieStringForUrl] 合并fanqie/snssdk cookie`);
+                }
+            }
+        } catch {}
+
+        // 保留原始 cookie（不再过滤 __next_*），以免影响第三方接口依赖的会话
+        // if (cookie) { console.log(`[getCookieStringForUrl] 使用原始cookie长度: ${cookie.length}`); }
+        
+        // 若无 cookie，但有 tokens.key（你提供的 key），拼成 qttoken
+        const tokens = auth.tokens || {};
+        // console.log(`[getCookieStringForUrl] tokens.key: ${tokens.key ? tokens.key.substring(0, 20) + '...' : '(无)'}`);
+        
+        if ((!cookie || !/qttoken=/.test(cookie)) && tokens.key) {
+            cookie = cookie ? `${cookie}; qttoken=${tokens.key}` : `qttoken=${tokens.key}`;
+            // console.log(`[getCookieStringForUrl] ✓ 添加qttoken后: ${cookie.substring(0, 100)}...`);
+        }
+        
+        return cookie;
+    } catch (e: any) {
+        console.error(`[getCookieStringForUrl] ✗ 错误:`, e.message);
+        return '';
+    }
+}
+
+export async function evaluateJs(script: string, context: { key?: string, page?: number, source?: BookSource, result?: any, cheerioElements?: any, baseUrl?: string, sharedVariables?: Record<string, any> }): Promise<string> {
     let result: string;
-    const sandbox = createSandbox(context.source, context.key, context.page, context.result, context.baseUrl);
+    const sandbox = createSandbox(context.source, context.key, context.page, context.result, context.baseUrl, context.sharedVariables);
     if (context.cheerioElements) {
         (sandbox as any).$ = context.cheerioElements;
     }
-    const vm = new VM({ timeout: 5000, sandbox, eval: false, wasm: false });
+    const vm = new VM({ timeout: 15000, sandbox, eval: false, wasm: false });
 
     if (!script.startsWith('<js>')) {
         result = script;
     } else {
-        const jsCode = script.substring(4, script.length - 5);
+        // 正确提取 <js> 和 </js> 之间的内容
+        const endTag = '</js>';
+        const endIndex = script.indexOf(endTag);
+        let jsCode: string;
+        
+        if (endIndex === -1) {
+            // 没有结束标记，使用旧逻辑
+            jsCode = script.substring(4, script.length - 5);
+        } else {
+            // 找到结束标记，只提取到结束标记为止
+            jsCode = script.substring(4, endIndex);
+        }
+        
+        // 如果JS代码最后一行是变量赋值且没有return，自动添加return
+        // 例如："content_url = xxx" → 自动 return content_url
+        const lastLineMatch = jsCode.match(/\n\s*(\w+)\s*=.*$/);
+        if (lastLineMatch && !jsCode.includes('return ')) {
+            const varName = lastLineMatch[1];
+            jsCode = jsCode + `\n${varName}`;
+        }
+        
+        console.log(`[evaluateJs] 执行JS代码，长度: ${jsCode.length}，前200字符: ${jsCode.substring(0, 200)}`);
         try {
             const vmResult = vm.run(jsCode);
             result = String(vmResult);
+            console.log(`[evaluateJs] ✅ JS执行成功，结果长度: ${result.length}，前200字符: ${result.substring(0, 200)}`);
+            
+            // 处理 </js> 后面的规则，如 $.content
+            if (endIndex !== -1 && endIndex + endTag.length < script.length) {
+                const afterJs = script.substring(endIndex + endTag.length).trim();
+                if (afterJs && afterJs.startsWith('$.')) {
+                    console.log(`[evaluateJs] 处理JS后的规则: ${afterJs}`);
+                    try {
+                        // 将JS结果解析为JSON，然后应用JSON path
+                        const jsResultObj = JSON.parse(result);
+                        const keys = afterJs.substring(2).split('.');
+                        let value: any = jsResultObj;
+                        for (const k of keys) {
+                            if (value && typeof value === 'object') {
+                                value = value[k];
+                            } else {
+                                break;
+                            }
+                        }
+                        if (value !== undefined) {
+                            result = String(value);
+                            console.log(`[evaluateJs] 应用规则${afterJs}后，结果长度: ${result.length}`);
+                        }
+                    } catch (e: any) {
+                        console.warn(`[evaluateJs] 无法解析JS结果或应用规则${afterJs}:`, e.message);
+                    }
+                }
+            }
         } catch (e: any) {
-            console.error("Error evaluating JS:", e.message, "\nScript:", jsCode.substring(0, 200) + "...");
+            console.error("[evaluateJs] ❌ JS执行失败:", e.message);
+            console.error("  - 错误堆栈:", e.stack?.split('\n').slice(0, 5).join('\n'));
+            console.error("  - Script前500字符:", jsCode.substring(0, 500) + "...");
             // 不要抛出错误，返回空字符串，让解析继续
             // 这样可以容错处理复杂的多段 JS 规则
             result = '';
@@ -866,6 +1269,8 @@ export async function parseListWithRules(data: string, listRule: string | undefi
                 // 剩余规则需要从匹配块的结尾位置开始截取，不能假定 <js> 在字符串起始
                 const start = (firstJsMatch as any).index ?? listRule.indexOf(firstJsMatch[0]);
                 const remainingRule = listRule.slice(start + firstJsMatch[0].length).trim();
+                // 兼容大灰狼写法：在 <js> 前面写了 JSON 路径，如 "$.data\n<js>..."
+                const preSelector = listRule.slice(0, start).trim();
                 
               //console.log(`[parseListWithRules] 执行数据预处理 JS，长度: ${jsCode.length}`);
               //console.log(`[parseListWithRules] baseUrl: ${baseUrl}`);
@@ -873,7 +1278,7 @@ export async function parseListWithRules(data: string, listRule: string | undefi
                 // 执行 JS 预处理，传递 baseUrl 覆盖默认值
                 const processedData = await evaluateJs(`<js>${jsCode}</js>`, { 
                     result: data, 
-                    source: undefined,
+                    source: source,
                     baseUrl: baseUrl  // 传递实际的 baseUrl
                 });
               //console.log(`[parseListWithRules] JS 预处理完成，结果长度: ${processedData.length}`);
@@ -883,14 +1288,54 @@ export async function parseListWithRules(data: string, listRule: string | undefi
                   //console.log(`[parseListWithRules] 使用剩余规则继续处理: ${remainingRule.substring(0, 100)}...`);
                     return await parseListWithRules(processedData, remainingRule, itemRules, baseUrl, source);
                 } else {
-                    // 没有剩余规则，尝试将结果解析为数组
-                    try {
-                        const result = JSON.parse(processedData);
-                        if (Array.isArray(result)) {
-                            return result;
+                    // 没有剩余规则：直接解析 processedData
+                    // 1) 若 <js> 前存在 JSON 路径（如 $.data），先解析 processedData 为 JSON，再取该路径
+                    if (preSelector && preSelector.startsWith('$.')) {
+                        try {
+                            const json = JSON.parse(processedData);
+                            const extracted = parseSingleRule(json, preSelector, baseUrl, true);
+                            if (Array.isArray(extracted)) {
+                                console.log(`[parseListWithRules] 从JS结果中提取 ${preSelector}，得到 ${extracted.length} 条`);
+                                // 对提取到的数组应用 itemRules 映射
+                                const results = [] as any[];
+                                for (let index = 0; index < extracted.length; index++) {
+                                    const item = extracted[index];
+                                    const resultItem: any = {};
+                                    for (const key in itemRules) {
+                                        const rule = itemRules[key];
+                                        if (rule) {
+                                            resultItem[key] = await parseWithRules(item, rule, baseUrl, source);
+                                        }
+                                    }
+                                    results.push(resultItem);
+                                }
+                                return results;
                         }
                     } catch (e) {
-                        console.warn(`[parseListWithRules] JS 结果不是有效的 JSON 数组`);
+                            // fallthrough
+                        }
+                    }
+                    // 2) 否则尝试 processedData 直接为数组
+                    try {
+                        const resultArr = JSON.parse(processedData);
+                        if (Array.isArray(resultArr) || (resultArr && Array.isArray(resultArr.data))) {
+                            const arr = Array.isArray(resultArr) ? resultArr : resultArr.data;
+                            const results = [] as any[];
+                            for (let index = 0; index < arr.length; index++) {
+                                const item = arr[index];
+                                const resultItem: any = {};
+                                for (const key in itemRules) {
+                                    const rule = itemRules[key];
+                                    if (rule) {
+                                        resultItem[key] = await parseWithRules(item, rule, baseUrl, source);
+                                    }
+                                }
+                                results.push(resultItem);
+                            }
+                            return results;
+                        }
+                    } catch (e) {
+                        // 不是数组，继续走通用逻辑
                     }
                 }
             }

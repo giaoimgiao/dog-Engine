@@ -79,17 +79,15 @@ function getSafetyMode(): 'off' | 'default' {
 }
 
 function buildSafetySettings(): GeminiGenerateRequest['safetySettings'] {
-    const mode = getSafetyMode();
-    // 五类过滤器全部设为 BLOCK_NONE（含 Civic Integrity）
+    // 始终使用 BLOCK_NONE，完全禁用所有安全过滤
+    // 这样可以避免内容被安全策略拦截
     const BLOCK_NONE = 'BLOCK_NONE';
-    const DEFAULT = 'BLOCK_NONE'; // 保持宽松，若想用官方默认，改为 'HARM_BLOCK_THRESHOLD_UNSPECIFIED'
-    const threshold = mode === 'off' ? BLOCK_NONE : DEFAULT;
     return [
-        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold },
-        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold },
-        { category: 'HARM_CATEGORY_HARASSMENT', threshold },
-        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold },
-        { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold },
+        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: BLOCK_NONE },
+        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: BLOCK_NONE },
+        { category: 'HARM_CATEGORY_HARASSMENT', threshold: BLOCK_NONE },
+        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: BLOCK_NONE },
+        { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: BLOCK_NONE },
     ];
 }
 
@@ -490,21 +488,48 @@ export async function* generateContentStream(
     };
 
     try {
-        const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${key}&alt=sse`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody),
-            }
-        );
+        // 握手阶段：支持可配置超时与重试（与非流式一致）
+        const timeoutMs = getGeminiTimeoutMs();
+        const retries = getGeminiRetries();
+        let response: Response | null = null;
+        let lastError: any = null;
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`API调用失败: ${response.status}`);
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                if (isGeminiDebugEnabled() && retries > 0) {
+                    console.debug('[Gemini][stream-attempt]', { attempt: attempt + 1, retries: retries + 1, timeoutMs });
+                }
+                response = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${key}&alt=sse`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+                        body: JSON.stringify(requestBody),
+                        // @ts-ignore - AbortSignal.timeout supported in modern browsers
+                        signal: (AbortSignal as any)?.timeout?.(timeoutMs),
+                    }
+                );
+                break; // success
+            } catch (e: any) {
+                lastError = e;
+                const msg = String(e?.message || e);
+                const isTimeout = msg.includes('timed out') || msg.includes('Timeout') || msg.includes('AbortError');
+                const isNetwork = msg.includes('Failed to fetch') || msg.includes('Network') || e?.name === 'TypeError';
+                if (attempt < retries && (isTimeout || isNetwork)) {
+                    continue; // retry handshake
+                }
+                throw e;
+            }
+        }
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        const nonNullResp = response!;
+
+        if (!nonNullResp.ok) {
+            const errorText = await nonNullResp.text();
+            throw new Error(`API调用失败: ${nonNullResp.status}`);
         }
 
-        const reader = response.body?.getReader();
+        const reader = nonNullResp.body?.getReader();
         if (!reader) throw new Error('无法获取响应流');
 
         const decoder = new TextDecoder();
@@ -515,17 +540,19 @@ export async function* generateContentStream(
             if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
+            const lines = buffer.split(/\r?\n/);
             buffer = lines.pop() || '';
 
             for (const line of lines) {
-                if (!line.trim() || !line.startsWith('data: ')) continue;
+                const trimmed = line.trim();
+                if (!trimmed || !trimmed.startsWith('data: ')) continue;
                 
                 try {
-                    const jsonStr = line.slice(6);
+                    const jsonStr = trimmed.slice(6);
                     const data = JSON.parse(jsonStr);
                     
-                    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text
+                        ?? data?.candidates?.[0]?.text; // 兼容部分实现
                     if (text) {
                         yield text;
                     }
@@ -534,6 +561,27 @@ export async function* generateContentStream(
                 }
             }
         }
+        // 结束后冲刷 decoder 与残余缓冲
+        try {
+            const tail = decoder.decode();
+            if (tail) buffer += tail;
+            if (buffer) {
+                for (const line of buffer.split(/\r?\n/)) {
+                    const trimmed = line.trim();
+                    if (!trimmed || !trimmed.startsWith('data: ')) continue;
+                    try {
+                        const jsonStr = trimmed.slice(6);
+                        if (jsonStr === '[DONE]') continue;
+                        const data = JSON.parse(jsonStr);
+                        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text
+                            ?? data?.candidates?.[0]?.text;
+                        if (text) {
+                            yield text;
+                        }
+                    } catch {}
+                }
+            }
+        } catch {}
     } catch (error: any) {
         console.error('Stream generation failed:', error);
         throw error;

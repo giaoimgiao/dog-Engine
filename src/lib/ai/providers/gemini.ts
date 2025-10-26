@@ -264,7 +264,19 @@ export class GeminiProvider implements AIProvider {
         message.includes('Network') ||
         message.includes('timed out') ||
         message.includes('Timeout')) {
-      return new NetworkError(this.id, { originalError: error });
+      const isBrowser = typeof window !== 'undefined';
+      const details: any = { originalError: error };
+      if (message.includes('timed out') || message.includes('Timeout')) {
+        details.category = 'TIMEOUT';
+      }
+      if (isBrowser) {
+        try {
+          details.navigatorOnline = typeof navigator !== 'undefined' ? navigator.onLine : undefined;
+        } catch {}
+        if (!details.category) details.category = 'CORS_OR_NETWORK';
+        details.hint = '可能为CORS或浏览器安全策略拦截，也可能为网络错误。建议使用后端代理或允许的CORS。';
+      }
+      return new NetworkError(this.id, details);
     }
     
     // 其他错误

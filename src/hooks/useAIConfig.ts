@@ -24,6 +24,7 @@ export function useAIConfig() {
             
             const allProviders = AIConfigManager.getProviders();
             const enabledProviders = allProviders.filter(p => p.enabled);
+            const enabledAndConfigured = enabledProviders.filter(p => (p.apiKey || '').trim().length > 0);
             setProviders(allProviders);
             
             const currentProviderId = AIConfigManager.getSelectedProvider();
@@ -31,7 +32,8 @@ export function useAIConfig() {
             
             // 如果当前选中的提供商不存在或已禁用，自动选择第一个可用的
             if (!currentProviderId || !enabledProviders.find(p => p.id === currentProviderId)) {
-                const firstProvider = enabledProviders[0];
+                // 仅在存在已配置密钥的提供商时才自动选择
+                const firstProvider = enabledAndConfigured[0];
                 if (firstProvider) {
                     setSelectedProviderId(firstProvider.id);
                     AIConfigManager.setSelectedProvider(firstProvider.id);

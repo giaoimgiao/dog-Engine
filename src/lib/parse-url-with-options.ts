@@ -77,12 +77,26 @@ export function buildRequestInit(
   parsedOptions: ParsedUrlOptions,
   baseHeaders: Record<string, string> = {}
 ): RequestInit {
+  const headers: Record<string, string> = {
+    ...baseHeaders,
+    ...(parsedOptions.headers || {}),
+  };
+  
+  // 如果有body但没有Content-Type，自动添加
+  if (parsedOptions.body && !headers['Content-Type'] && !headers['content-type']) {
+    // 检测body格式
+    if (typeof parsedOptions.body === 'string') {
+      if (parsedOptions.body.startsWith('{') || parsedOptions.body.startsWith('[')) {
+        headers['Content-Type'] = 'application/json';
+      } else if (parsedOptions.body.includes('=') && parsedOptions.body.includes('&')) {
+        headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      }
+    }
+  }
+  
   return {
     method: parsedOptions.method || 'GET',
-    headers: {
-      ...baseHeaders,
-      ...(parsedOptions.headers || {}),
-    },
+    headers,
     body: parsedOptions.body,
   };
 }

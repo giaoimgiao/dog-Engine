@@ -57,6 +57,10 @@ export interface AdvancedGenerationConfig {
   enableDynamicThinking?: boolean;
   /** 思考预算token数（仅Gemini 2.5系列，-1为动态，0为禁用） */
   thinkingBudget?: number;
+  /** 请求超时时间（毫秒），用于提升网络抖动容忍度 */
+  requestTimeoutMs?: number;
+  /** 请求重试次数（0-3），针对超时/网络错误与5xx重试 */
+  retries?: number;
 }
 
 /**

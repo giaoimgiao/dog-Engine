@@ -123,7 +123,7 @@ export async function parseRuleWithCssJs(
         };
         
         const vm = new VM({
-            timeout: 5000,
+            timeout: 15000,
             sandbox,
             eval: false,
             wasm: false,

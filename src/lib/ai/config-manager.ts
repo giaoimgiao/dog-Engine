@@ -182,7 +182,10 @@ export class AIConfigManager {
    * 获取启用的提供商配置
    */
   static getEnabledProviders(): AIProviderConfig[] {
-    return this.getProviders().filter(p => p.enabled);
+    // 仅返回“启用且已正确配置密钥”的提供商，避免加载占位默认项（如 gemini-default 无密钥）
+    return this.getProviders().filter(
+      p => p.enabled && typeof p.apiKey === 'string' && p.apiKey.trim().length > 0
+    );
   }
 
   /**
@@ -577,11 +580,12 @@ export class AIConfigManager {
   static onConfigChange(callback: (event: CustomEvent) => void): () => void {
     if (typeof window === 'undefined') return () => {};
     
-    window.addEventListener('ai-config-change', callback);
+    // 使用 as EventListener 适配 TS 对自定义事件的签名检查
+    window.addEventListener('ai-config-change', callback as unknown as EventListener);
     
     // 返回取消监听的函数
     return () => {
-      window.removeEventListener('ai-config-change', callback);
+      window.removeEventListener('ai-config-change', callback as unknown as EventListener);
     };
   }
 

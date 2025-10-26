@@ -74,6 +74,36 @@ export class UnifiedAIClient {
   }
 
   /**
+   * 调用前的兼容性校正：如果标记为 gemini 但实际并非 Google 官方端点，则动态改用 OpenAI 兼容调用
+   */
+  private ensureProviderForCall(provider: AIProvider): AIProvider {
+    try {
+      if (provider.type === 'gemini') {
+        const apiUrl = String(provider.apiUrl || '');
+        const isGoogleGemini = apiUrl.includes('generativelanguage.googleapis.com');
+        if (!isGoogleGemini) {
+          this.log(`Routing provider '${provider.id}' (gemini) via OpenAI-compatible due to non-Google apiUrl: ${apiUrl}`);
+          const advancedConfig = (provider as any)?.advancedConfig;
+          return new OpenAICompatibleProvider(
+            provider.id,
+            provider.name,
+            provider.displayName,
+            provider.apiUrl,
+            provider.apiKey,
+            provider.enabled,
+            provider.defaultModel,
+            provider.customHeaders,
+            advancedConfig
+          );
+        }
+      }
+    } catch {
+      // ignore and fallback to original provider
+    }
+    return provider;
+  }
+
+  /**
    * 添加提供商
    */
   addProvider(provider: AIProvider): void {
@@ -130,7 +160,8 @@ export class UnifiedAIClient {
     };
 
     try {
-      const provider = this.getProvider(providerId);
+      const rawProvider = this.getProvider(providerId);
+      const provider = rawProvider ? this.ensureProviderForCall(rawProvider) : rawProvider;
       if (!provider) {
         throw new AIProviderError(
           `Provider '${providerId}' not found`,
@@ -143,6 +174,16 @@ export class UnifiedAIClient {
         throw new AIProviderError(
           `Provider '${providerId}' is disabled`,
           'PROVIDER_DISABLED',
+          providerId
+        );
+      }
+
+      // 额外防御：避免“启用但未配置密钥”的占位提供商导致网络错误
+      const apiKey = (provider as any)?.apiKey as string | undefined;
+      if (!apiKey || apiKey.trim().length === 0) {
+        throw new AIProviderError(
+          `Provider '${providerId}' is missing API key`,
+          'MISSING_API_KEY',
           providerId
         );
       }
@@ -188,7 +229,8 @@ export class UnifiedAIClient {
     };
 
     try {
-      const provider = this.getProvider(providerId);
+      const rawProvider = this.getProvider(providerId);
+      const provider = rawProvider ? this.ensureProviderForCall(rawProvider) : rawProvider;
       if (!provider) {
         throw new AIProviderError(
           `Provider '${providerId}' not found`,
@@ -201,6 +243,16 @@ export class UnifiedAIClient {
         throw new AIProviderError(
           `Provider '${providerId}' is disabled`,
           'PROVIDER_DISABLED',
+          providerId
+        );
+      }
+
+      // 额外防御：未配置密钥直接报错，避免误判为网络问题
+      const apiKey = (provider as any)?.apiKey as string | undefined;
+      if (!apiKey || apiKey.trim().length === 0) {
+        throw new AIProviderError(
+          `Provider '${providerId}' is missing API key`,
+          'MISSING_API_KEY',
           providerId
         );
       }
@@ -457,17 +509,36 @@ export class UnifiedAIClient {
   private createProviderFromConfig(config: any): AIProvider {
     switch (config.type) {
       case 'gemini':
-        return new GeminiProvider(
-          config.id,
-          config.name,
-          config.displayName,
-          config.apiUrl,
-          config.apiKey,
-          config.enabled,
-          config.defaultModel,
-          config.customHeaders,
-          config.advancedConfig
-        );
+        {
+          const apiUrl: string = String(config.apiUrl || '');
+          const isGoogleGemini = apiUrl.includes('generativelanguage.googleapis.com');
+          // 若用户将“Gemini”配置指向了OpenAI兼容聚合服务，则改用OpenAI兼容提供商
+          if (!isGoogleGemini) {
+            this.log(`Gemini provider '${config.id}' apiUrl is not Google endpoint; routing via OpenAI-compatible provider.`);
+            return new OpenAICompatibleProvider(
+              config.id,
+              config.name,
+              config.displayName,
+              apiUrl,
+              config.apiKey,
+              config.enabled,
+              config.defaultModel,
+              config.customHeaders,
+              config.advancedConfig
+            );
+          }
+          return new GeminiProvider(
+            config.id,
+            config.name,
+            config.displayName,
+            config.apiUrl,
+            config.apiKey,
+            config.enabled,
+            config.defaultModel,
+            config.customHeaders,
+            config.advancedConfig
+          );
+        }
       
       case 'openai':
       case 'claude':
@@ -658,7 +729,5 @@ export async function* autoGenerateContentStream(
 /**
  * 导出相关类型
  */
-export type {
-  UnifiedAIClientOptions,
-  GenerationStats,
-};
+export type UnifiedAIClientOptionsAlias = UnifiedAIClientOptions;
+export type GenerationStatsAlias = GenerationStats;

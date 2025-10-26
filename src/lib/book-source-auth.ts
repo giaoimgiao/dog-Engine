@@ -50,14 +50,18 @@ export async function getCookieForUrl(sourceId: string, targetUrl: string): Prom
     const domainHost = u.host; // host with port
     const all = await readAll();
     const auth = all.find(a => a.sourceId === sourceId);
-    if (!auth || !auth.cookies) return '';
-    // try full origin, then host, then hostname
-    return (
-      auth.cookies[domain] ||
-      auth.cookies[domainHost] ||
-      auth.cookies[u.hostname] ||
+    if (!auth) return '';
+    const foundCookie = (
+      auth.cookies?.[domain] ||
+      auth.cookies?.[domainHost] ||
+      auth.cookies?.[u.hostname] ||
       ''
     );
+    const key = auth.tokens?.key;
+    if (key && !/qttoken=/.test(foundCookie)) {
+      return foundCookie ? `${foundCookie}; qttoken=${key}` : `qttoken=${key}`;
+    }
+    return foundCookie;
   } catch {
     return '';
   }

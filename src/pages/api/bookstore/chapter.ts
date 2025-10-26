@@ -57,46 +57,113 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let jsContextResult: any = {};
         
         if (url.startsWith('data:')) {
-            const parts = url.split(',');
-            const encoded = parts[1];
-            const decoded = Buffer.from(encoded, 'base64').toString('utf-8');
-             
-            if (parts.length > 2 && parts[2].startsWith('{')) {
-                jsContextResult = JSON.parse(parts[2]);
-            }
-            
-            // The decoded part is the actual JS to run
-            chapterUrl = await evaluateJs(`<js>${decoded}</js>`, { source, result: jsContextResult });
-            console.log(`${logPrefix} Evaluated data URL to: ${chapterUrl}`);
+            // data:;base64,<b64>,{json}
+            const firstComma = url.indexOf(',');
+            const rest = firstComma >= 0 ? url.substring(firstComma + 1) : '';
+            const jsonStartIdx = rest.indexOf(',{');
+            const encoded = jsonStartIdx >= 0 ? rest.substring(0, jsonStartIdx) : rest;
+            const jsonPart = jsonStartIdx >= 0 ? rest.substring(jsonStartIdx + 1) : '';
+            try { if (jsonPart.trim().startsWith('{')) jsContextResult = JSON.parse(jsonPart); } catch {}
+            // 保持chapterUrl为原始dataURL，交给content JS去解析
+            chapterUrl = url;
+            console.log(`${logPrefix} Detected data URL. b64Len=${encoded.length}, ctxKeys=${Object.keys(jsContextResult||{}).length}`);
 
         } else if (url.startsWith('<js>')) {
             chapterUrl = await evaluateJs(url, { source });
             console.log(`${logPrefix} Evaluated JS URL to: ${chapterUrl}`);
         }
 
-        // 解析Legado格式的URL和请求配置 (URL,{options})
-        const parsedUrl = parseUrlWithOptions(chapterUrl);
-        chapterUrl = parsedUrl.url;
-        console.log(`${logPrefix} Parsed request options:`, { method: parsedUrl.method, hasBody: !!parsedUrl.body, extraHeaders: Object.keys(parsedUrl.headers || {}) });
-        
-        console.log(`${logPrefix} Fetching chapter content from: ${chapterUrl}`);
-        const cookieHeader = await getCookieForUrl(source.id, chapterUrl);
-        const mergedHeaders: Record<string, string> = {
-            ...requestHeaders,
-            ...(parsedUrl.headers || {}), // URL中指定的headers优先级更高
-            ...(cookieHeader ? { cookie: cookieHeader } : {}),
-        };
-        
-        // 构建完整的请求配置
-        requestOptions = buildRequestInit(parsedUrl, mergedHeaders);
-        console.log(`${logPrefix} Final request config:`, { method: requestOptions.method, headers: Object.keys(requestOptions.headers as any), hasBody: !!requestOptions.body });
-        
-        const response = await fetch(chapterUrl, requestOptions);
-        console.log(`${logPrefix} Fetched with status: ${response.status}`);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch chapter content from ${chapterUrl}. Status: ${response.status}`);
+        // 🔧 先检查是否是相对路径（data: 则跳过补全）
+        let fullChapterUrl = chapterUrl;
+        if (!chapterUrl.startsWith('data:')) {
+            // 提取URL部分（可能包含,{options}）
+            const urlMatch = chapterUrl.match(/^([^,]+)/);
+            const urlPart = urlMatch ? urlMatch[1].trim() : chapterUrl;
+            
+            if (!urlPart.startsWith('http://') && !urlPart.startsWith('https://')) {
+                // 从 loginUrl 或 jsLib 中提取服务器列表
+                const getHostsFromComment = (comment: string = '', jsLib: string = '', loginUrl: string = ''): string[] => {
+                const combinedScript = `${comment}\n${jsLib}\n${loginUrl}`;
+                
+                // 方法1: 查找 const host = [...]
+                let match = combinedScript.match(/const\s+host\s*=\s*(\[[\s\S]*?\])/);
+                if (match && match[1]) {
+                    try {
+                        const { VM } = require('vm2');
+                        const vm = new VM();
+                        return vm.run(`module.exports = ${match[1]};`);
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+                
+                // 方法2: 查找 encodedEndpoints（大灰狼书源格式）
+                match = combinedScript.match(/const\s+encodedEndpoints\s*=\s*\[([\s\S]*?)\];/);
+                if (match && match[1]) {
+                    try {
+                        const base64Strings = match[1].match(/'([^']+)'/g) || [];
+                        const decodedHosts = base64Strings
+                            .map(s => s.replace(/'/g, '').trim())
+                            .filter(s => s.length > 0)
+                            .map(b64 => {
+                                try {
+                                    return Buffer.from(b64, 'base64').toString('utf-8');
+                                } catch (e) {
+                                    return null;
+                                }
+                            })
+                            .filter(h => h && (h.startsWith('http://') || h.startsWith('https://')));
+                        
+                        if (decodedHosts.length > 0) {
+                            return decodedHosts as string[];
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+                
+                return [];
+                };
+                
+                const hosts = getHostsFromComment(source.comment, source.jsLib, source.loginUrl);
+                if (hosts.length > 0) {
+                    const baseUrl = hosts[0];
+                    // 替换URL部分，保留options部分
+                    fullChapterUrl = baseUrl + urlPart + chapterUrl.substring(urlPart.length);
+                    console.log(`${logPrefix} 补全相对路径URL: ${fullChapterUrl}`);
+                } else {
+                    console.error(`${logPrefix} 无法补全相对路径URL，未找到服务器地址`);
+                    return res.status(400).json({ success: false, error: `书源配置错误：URL是相对路径（${urlPart}），但未找到服务器地址` });
+                }
+            }
         }
-        const html = await response.text();
+        
+        // 现在解析完整的URL和请求配置（data: URL 不走网络请求）
+        let html = '';
+        if (!chapterUrl.startsWith('data:')) {
+            const parsedUrl = parseUrlWithOptions(fullChapterUrl);
+            chapterUrl = parsedUrl.url;
+            console.log(`${logPrefix} Parsed request options:`, { method: parsedUrl.method, hasBody: !!parsedUrl.body, extraHeaders: Object.keys(parsedUrl.headers || {}) });
+            
+            console.log(`${logPrefix} Fetching chapter content from: ${chapterUrl}`);
+            const cookieHeader = await getCookieForUrl(source.id, chapterUrl);
+            const mergedHeaders: Record<string, string> = {
+                ...requestHeaders,
+                ...(parsedUrl.headers || {}), // URL中指定的headers优先级更高
+                ...(cookieHeader ? { cookie: cookieHeader } : {}),
+            };
+            
+            // 构建完整的请求配置
+            requestOptions = buildRequestInit(parsedUrl, mergedHeaders);
+            console.log(`${logPrefix} Final request config:`, { method: requestOptions.method, headers: Object.keys(requestOptions.headers as any), hasBody: !!requestOptions.body });
+            
+            const response = await fetch(chapterUrl, requestOptions);
+            console.log(`${logPrefix} Fetched with status: ${response.status}`);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch chapter content from ${chapterUrl}. Status: ${response.status}`);
+            }
+            html = await response.text();
+        }
 
         let content = '';
         
@@ -115,11 +182,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (qs) {
                 evalBaseUrl = Buffer.from(qs, 'utf-8').toString('base64');
             }
-        } catch {}
+        } catch {
+            // data: URL 场景，baseUrl 直接使用 base64 段
+            if (chapterUrl.startsWith('data:')) {
+                const firstComma = chapterUrl.indexOf(',');
+                const rest = firstComma >= 0 ? chapterUrl.substring(firstComma + 1) : '';
+                const jsonStartIdx = rest.indexOf(',{');
+                const encoded = jsonStartIdx >= 0 ? rest.substring(0, jsonStartIdx) : rest;
+                evalBaseUrl = encoded;
+            }
+        }
 
         if (contentRule.content.startsWith('<js>')) {
              // console.log(`${logPrefix} Evaluating content rule with JS.`);
-             content = await evaluateJs(contentRule.content, { source, result: html, baseUrl: evalBaseUrl });
+             // data: URL场景：result传入base64段（解码后供JS split解析）
+             let jsCarrier = html;
+             if (chapterUrl.startsWith('data:')) {
+                 const firstComma = chapterUrl.indexOf(',');
+                 const rest = firstComma >= 0 ? chapterUrl.substring(firstComma + 1) : '';
+                 const jsonStartIdx = rest.indexOf(',{');
+                 const encoded = jsonStartIdx >= 0 ? rest.substring(0, jsonStartIdx) : rest;
+                 // 将base64解码后作为result传入JS
+                 try {
+                     jsCarrier = Buffer.from(encoded, 'base64').toString('utf-8');
+                     console.log(`${logPrefix} data: URL解码后传入JS，长度: ${jsCarrier.length}，内容: ${jsCarrier}`);
+                 } catch {}
+             }
+             content = await evaluateJs(contentRule.content, { source, result: jsCarrier, baseUrl: evalBaseUrl });
 
              // Fallback：如果 JS 没产出正文，尝试直接从接口 JSON 取 content 字段
              if (!content || content.trim().length === 0) {
@@ -139,6 +228,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     content = parsedContent.content;
                 }
              } catch(e) { /* Not a JSON string, use as is */ }
+
+             // Fallback 2：当返回为空或包含登录错误时，尝试 data: JSON 中的 get_review 接口（通常无需登录）
+             try {
+                const needFallback = !content || /账号存在错误|请重新登录/i.test(content);
+                if (needFallback && chapterUrl.startsWith('data:')) {
+                    const firstComma = chapterUrl.indexOf(',');
+                    const rest = firstComma >= 0 ? chapterUrl.substring(firstComma + 1) : '';
+                    const jsonStartIdx = rest.indexOf(',{');
+                    const jsonPart = jsonStartIdx >= 0 ? rest.substring(jsonStartIdx + 1) : '';
+                    let getReviewUrl = '';
+                    try {
+                        const ctx = JSON.parse(jsonPart || '{}');
+                        const jsExpr = String(ctx.js || '');
+                        const m = jsExpr.match(/'(https?:\/\/[^']*\/get_review[^']*)'/);
+                        if (m && m[1]) getReviewUrl = m[1];
+                    } catch {}
+                    if (getReviewUrl) {
+                        console.log(`${logPrefix} 使用get_review兜底: ${getReviewUrl}`);
+                        const cookieHeader = await getCookieForUrl(source.id, getReviewUrl);
+                        const headers: Record<string,string> = {
+                            ...requestHeaders,
+                            ...(cookieHeader ? { cookie: cookieHeader } : {})
+                        };
+                        const resp = await fetch(getReviewUrl, { headers });
+                        const txt = await resp.text();
+                        try {
+                            const obj = JSON.parse(txt);
+                            const direct = (obj && (obj.content || obj.data?.content)) || '';
+                            if (direct) content = direct;
+                        } catch {
+                            if (txt && txt.trim()) content = txt;
+                        }
+                    }
+                }
+             } catch {}
 
         } else if (contentRule.content.startsWith('$.')) {
              console.log(`${logPrefix} Evaluating content rule with JSON path: ${contentRule.content}`);
@@ -174,6 +298,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } else {
             // no replaceRegex
         }
+
+        // 额外噪声过滤：若误拿到“段评/评论页面”的CSS/JS文本，尽量剔除
+        try {
+            const looksLikeCssJs = (txt: string) => /:root\s*\{|document\.addEventListener|comment\-modal|comment\-type\-btn|position:\s*fixed|animation:|@keyframes|const\s+urlParams|let\s+bookId|function\s+render/.test(txt);
+            if (looksLikeCssJs(content)) {
+                const cssJsPatterns = [
+                    /:root[\s\S]*?\}/g,
+                    /@keyframes[\s\S]*?\}/g,
+                    /\b(document|window)\.[\s\S]*?;\s*/g,
+                    /\b(const|let|var)\s+[\s\S]*?;\s*/g,
+                ];
+                for (const r of cssJsPatterns) content = content.replace(r, '');
+                // 行级过滤（常见CSS/JS语句）
+                content = content
+                    .split(/\r?\n/)
+                    .filter(l => !/(^\s*[.#:\\w-]+\s*\{|\}|;\s*$|\b(background|color|border|opacity|transition|transform|cursor|display|position|padding|margin|width|height)\s*:)/.test(l))
+                    .filter(l => !/^(const|let|var)\b|=>|function\b/.test(l))
+                    .filter(l => !/加载中\.\.\.|^\s*$/.test(l))
+                    .join('\n');
+            }
+            // 移除“账号错误/请重新登录”提示文字
+            content = content.replace(/您当前账号存在错误！?请重新登录！?/g, '');
+        } catch {}
 
         // 统一规范化：换行、空白、去标签
         content = content
@@ -228,6 +375,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
         }
         
+        // 2.5 data: URL 场景下，直接从 base64 解码串中提取章节名
+        if (!chapterTitle && chapterUrl.startsWith('data:')) {
+            try {
+                const firstComma = chapterUrl.indexOf(',');
+                const rest = firstComma >= 0 ? chapterUrl.substring(firstComma + 1) : '';
+                const jsonStartIdx = rest.indexOf(',{');
+                const encoded = jsonStartIdx >= 0 ? rest.substring(0, jsonStartIdx) : rest;
+                const decoded = Buffer.from(encoded, 'base64').toString('utf-8');
+                const parts = decoded.split('大灰狼融合4');
+                if (parts.length >= 3) {
+                    const t = parts[2];
+                    if (t && t.trim()) {
+                        chapterTitle = t.trim();
+                        console.log(`${logPrefix} 从data:串提取到章节名: ${chapterTitle}`);
+                    }
+                }
+            } catch {}
+        }
+
         // 3. 最后退回 HTML <title>
         if (!chapterTitle) {
             console.log(`${logPrefix} No title found, using HTML <title> fallback...`);

@@ -137,13 +137,15 @@ export class OpenAICompatibleProvider implements AIProvider {
         content: prompt,
       });
 
-      const requestBody: OpenAIRequest = {
+      const reasoning = this.buildReasoningPayload(modelId, mergedOptions.thinkingBudget);
+      const requestBody: any = {
         model: modelId,
         messages,
         temperature: mergedOptions.temperature ?? 0.7,
         max_tokens: mergedOptions.maxOutputTokens ?? 2048,
         top_p: mergedOptions.topP,
         stream: false,
+        ...(reasoning ? { reasoning } : {}),
       };
 
       const response = await this.makeRequest('/chat/completions', {
@@ -201,18 +203,23 @@ export class OpenAICompatibleProvider implements AIProvider {
         content: prompt,
       });
 
-      const requestBody: OpenAIRequest = {
+      const reasoning = this.buildReasoningPayload(modelId, mergedOptions.thinkingBudget);
+      const requestBody: any = {
         model: modelId,
         messages,
         temperature: mergedOptions.temperature ?? 0.7,
         max_tokens: mergedOptions.maxOutputTokens ?? 2048,
         top_p: mergedOptions.topP,
         stream: true,
+        ...(reasoning ? { reasoning } : {}),
       };
 
       const response = await this.makeRequest('/chat/completions', {
         method: 'POST',
-        headers: this.getHeaders(mergedOptions.customHeaders),
+        headers: {
+          ...this.getHeaders(mergedOptions.customHeaders),
+          'Accept': 'text/event-stream',
+        },
         body: JSON.stringify(requestBody),
       });
 
@@ -234,19 +241,22 @@ export class OpenAICompatibleProvider implements AIProvider {
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
+          const lines = buffer.split(/\r?\n/);
           buffer = lines.pop() || '';
 
           for (const line of lines) {
             const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith('data: ')) continue;
+            if (!trimmed) continue;
+            // 兼容SSE的其它字段（event:, id:, retry:），仅处理data:
+            if (!trimmed.startsWith('data: ')) continue;
             
             const data = trimmed.slice(6);
             if (data === '[DONE]') return;
 
             try {
               const chunk: OpenAIStreamChunk = JSON.parse(data);
-              const content = chunk.choices?.[0]?.delta?.content;
+              const content = chunk.choices?.[0]?.delta?.content
+                ?? (chunk as any)?.choices?.[0]?.text;
               if (content) {
                 yield content;
               }
@@ -256,6 +266,30 @@ export class OpenAICompatibleProvider implements AIProvider {
             }
           }
         }
+        // 流结束后冲刷 decoder 与残余缓冲，避免尾包丢失
+        try {
+          const tail = decoder.decode();
+          if (tail) {
+            buffer += tail;
+          }
+          if (buffer) {
+            for (const line of buffer.split(/\r?\n/)) {
+              const trimmed = line.trim();
+              if (!trimmed || !trimmed.startsWith('data: ')) continue;
+              const data = trimmed.slice(6);
+              if (data !== '[DONE]') {
+                try {
+                  const chunk: OpenAIStreamChunk = JSON.parse(data);
+                  const content = chunk.choices?.[0]?.delta?.content
+                    ?? (chunk as any)?.choices?.[0]?.text;
+                  if (content) {
+                    yield content;
+                  }
+                } catch {}
+              }
+            }
+          }
+        } catch {}
       } finally {
         reader.releaseLock();
       }
@@ -382,9 +416,24 @@ export class OpenAICompatibleProvider implements AIProvider {
       topP: options?.topP ?? advancedConfig.defaultTopP,
       topK: options?.topK ?? advancedConfig.defaultTopK,
       customHeaders: options?.customHeaders,
-      // OpenAI兼容提供商不支持思考功能
-      thinkingBudget: options?.thinkingBudget,
+      // 透传思考预算（聚合端可选择性支持）
+      thinkingBudget: options?.thinkingBudget ?? advancedConfig.thinkingBudget,
     };
+  }
+
+  /**
+   * 针对聚合端的可选 reasoning 映射：
+   * - 仅当 apiUrl 非 OpenAI 官方时启用，避免影响官方API
+   * - thinkingBudget: -1 表示动态/自动，其余为固定token预算
+   * 返回形如 { budget_tokens: number | 'auto' }
+   */
+  private buildReasoningPayload(modelId: string, thinkingBudget?: number): { budget_tokens: number | 'auto' } | null {
+    if (thinkingBudget === undefined) return null;
+    const url = (this.apiUrl || '').toLowerCase();
+    const isOpenAI = url.includes('api.openai.com');
+    if (isOpenAI) return null;
+    const budget = thinkingBudget === -1 ? 'auto' : Math.max(0, Math.floor(thinkingBudget));
+    return { budget_tokens: budget as any };
   }
 
   /**
@@ -393,19 +442,41 @@ export class OpenAICompatibleProvider implements AIProvider {
   private async makeRequest(endpoint: string, options: RequestInit): Promise<Response> {
     const url = `${this.apiUrl.replace(/\/$/, '')}${endpoint}`;
     
-    const timeoutMs = 30000; // 30秒超时
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    // 可配置超时与重试（默认：30s超时，重试1次）
+    const timeoutMs = this.advancedConfig?.requestTimeoutMs && this.advancedConfig.requestTimeoutMs >= 5000
+      ? this.advancedConfig.requestTimeoutMs
+      : 30000;
+    const retries = this.advancedConfig?.retries !== undefined
+      ? Math.max(0, Math.min(3, this.advancedConfig.retries))
+      : 1;
 
-    try {
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-      });
-      return response;
-    } finally {
-      clearTimeout(timeoutId);
+    let lastError: any = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const resp = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timeoutId);
+        // 仅对5xx做重试；其余直接返回
+        if (!resp.ok && resp.status >= 500 && attempt < retries) {
+          lastError = new Error(`HTTP ${resp.status}`);
+          continue;
+        }
+        return resp;
+      } catch (e: any) {
+        clearTimeout(timeoutId);
+        const msg = String(e?.message || e);
+        const isTimeout = e?.name === 'AbortError' || msg.includes('timed out') || msg.includes('Timeout') || msg.includes('aborted');
+        const isNetwork = msg.includes('Failed to fetch') || msg.includes('Network') || e?.name === 'TypeError';
+        lastError = e;
+        if (attempt < retries && (isTimeout || isNetwork)) {
+          continue;
+        }
+        throw e;
+      }
     }
+    // 理论上不会到达这里
+    throw lastError || new Error('Unknown request error');
   }
 
   /**
@@ -496,13 +567,26 @@ export class OpenAICompatibleProvider implements AIProvider {
     
     // 网络相关错误
     if (error.name === 'AbortError' || message.includes('aborted')) {
-      return new NetworkError(this.id, { error: '请求超时', originalError: error });
+      return new NetworkError(this.id, { error: '请求超时', category: 'TIMEOUT', originalError: error });
     }
     
-    if (message.includes('Failed to fetch') || 
-        message.includes('Network') ||
-        message.includes('fetch')) {
-      return new NetworkError(this.id, { originalError: error });
+    // 浏览器环境下常见的CORS/安全拦截会表现为 TypeError: Failed to fetch
+    const isBrowser = typeof window !== 'undefined';
+    if (
+      message.includes('Failed to fetch') || 
+      message.includes('Network') ||
+      message.includes('fetch') ||
+      error?.name === 'TypeError'
+    ) {
+      const details: any = { originalError: error };
+      if (isBrowser) {
+        try {
+          details.navigatorOnline = typeof navigator !== 'undefined' ? navigator.onLine : undefined;
+        } catch {}
+        details.category = 'CORS_OR_NETWORK';
+        details.hint = '可能为CORS或浏览器安全策略拦截，也可能为网络错误。建议使用后端代理或开启允许的CORS。';
+      }
+      return new NetworkError(this.id, details);
     }
     
     // 其他错误

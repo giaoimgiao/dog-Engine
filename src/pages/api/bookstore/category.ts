@@ -136,32 +136,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             };
             
             try {
-                const response = await fetch(realUrl, enhancedInit);
-                // console.log(`${logPrefix} Fetched with status: ${response.status}`);
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch category page from ${realUrl}. Status: ${response.status}`);
-                }
-                
-                const contentType = response.headers.get('content-type') || '';
-                // console.log(`${logPrefix} Response content-type: ${contentType}`);
-                
-                if (contentType.includes('application/json')) {
-                    // 如果返回的是JSON，直接解析
-                    const jsonData = await response.json();
-                    data = JSON.stringify(jsonData);
-                    // console.log(`${logPrefix} Received JSON data, keys: ${Object.keys(jsonData).join(', ')}`);
-                } else {
-                    // 否则作为文本处理
-                    data = await response.text();
-                    // console.log(`${logPrefix} Received text data, length: ${data.length}, starts with: ${data.substring(0, 100)}...`);
-                }
+                // 首选直连（100s超时），失败则尝试 http->https 域切换一次
+                const tryFetch = async (u: string) => {
+                    const resp = await fetch(u, { ...enhancedInit, signal: AbortSignal.timeout(700000) });
+                    if (!resp.ok) throw new Error(`Status ${resp.status}`);
+                    const ct = resp.headers.get('content-type') || '';
+                    if (ct.includes('application/json')) { data = JSON.stringify(await resp.json()); }
+                    else { data = await resp.text(); }
+                };
+                await tryFetch(realUrl);
             } catch (e: any) {
-                console.warn(`${logPrefix} Direct fetch failed (${e?.code || e?.message}), error:`, e);
-                // 使用系统代理（HTTP(S)_PROXY）重试（回退实现：直接返回错误，不影响其他源）
+                console.warn(`${logPrefix} Direct fetch failed (${e?.code || e?.message}), fallback to alt domain if possible`);
                 try {
-                    throw e;
-                } catch (proxyError) {
-                    console.error(`${logPrefix} Proxy attempt skipped/failure. Returning error.`);
+                    // 域名兜底：api.langge.cf <-> https://api.langge.cf <-> http://api.langge.cf
+                    const urlObj = new URL(realUrl);
+                    if (!/^https?:$/.test(urlObj.protocol)) urlObj.protocol = 'https:';
+                    const altCandidates = new Set<string>();
+                    altCandidates.add(`https://${urlObj.host}${urlObj.pathname}${urlObj.search}`);
+                    altCandidates.add(`http://${urlObj.host}${urlObj.pathname}${urlObj.search}`);
+                    for (const alt of altCandidates) {
+                        try {
+                            await (async () => {
+                                const resp = await fetch(alt, { ...enhancedInit, signal: AbortSignal.timeout(70000) });
+                                if (!resp.ok) throw new Error(`Status ${resp.status}`);
+                                const ct = resp.headers.get('content-type') || '';
+                                if (ct.includes('application/json')) { data = JSON.stringify(await resp.json()); }
+                                else { data = await resp.text(); }
+                            })();
+                            console.log(`${logPrefix} Fallback fetched from: ${alt}`);
+                            break;
+                        } catch {}
+                    }
+                    if (!data) throw e;
+                } catch (e2) {
+                    console.error(`${logPrefix} Fallbacks exhausted.`);
                     throw e;
                 }
             }
@@ -190,22 +198,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         if ((typeof mode === 'string' && mode.toLowerCase() === 'explore') || (!!exploreUrl && !mode)) {
-             const categoriesRaw = await parseListWithRules(data, '$.', {
-                title: '$.title',
-                url: '$.url',
-            }, baseUrl);
-            let categories: BookstoreCategory[] = categoriesRaw.map(cat => ({...cat, sourceId}));
+            console.log(`${logPrefix} 解析exploreUrl返回的数据，前500字符:`, data.substring(0, 500));
             
-            // 如果解析结果为空，可能是依赖 java.ajax 的书源，提供fallback
-            if (categories.length === 0 && source.name.includes('大灰狼')) {
-                console.log(`${logPrefix} ⚠️ 大灰狼书源的发现页依赖 java.ajax，Web环境不支持。提供简化分类。`);
-                categories = [
-                    { title: '💡 提示', url: '', sourceId },
-                    { title: '大灰狼书源的发现页需要Android APP支持', url: '', sourceId },
-                    { title: '但搜索功能完全正常！', url: '', sourceId },
-                    { title: '👉 请使用顶部搜索框搜索书籍', url: '', sourceId },
-                ];
+            // 如果data是JSON字符串，先解析它
+            let parsedData: any;
+            try {
+                parsedData = JSON.parse(data);
+                console.log(`${logPrefix} 成功解析JSON，类型: ${Array.isArray(parsedData) ? 'Array' : typeof parsedData}`);
+                if (Array.isArray(parsedData)) {
+                    console.log(`${logPrefix} 数组长度: ${parsedData.length}，第一个元素:`, parsedData[0]);
+                }
+            } catch (e) {
+                console.log(`${logPrefix} 不是JSON格式，作为HTML处理`);
+                parsedData = data;
             }
+            
+            // 如果是数组，直接使用；否则使用parseListWithRules
+            let categoriesRaw: any[];
+            if (Array.isArray(parsedData)) {
+                // 直接使用数组，但要过滤掉无效项
+                categoriesRaw = parsedData.filter(item => 
+                    item && typeof item === 'object' && 
+                    item.title && item.title.trim() && 
+                    item.url !== undefined  // url可以为空字符串
+                );
+                console.log(`${logPrefix} 过滤后的分类数量: ${categoriesRaw.length}`);
+            } else {
+                // 使用原来的解析规则
+                categoriesRaw = await parseListWithRules(data, '$[*]', {
+                    title: '$.title',
+                    url: '$.url',
+                }, baseUrl);
+            }
+            
+            let categories: BookstoreCategory[] = categoriesRaw.map(cat => ({...cat, sourceId}));
             
             console.log(`${logPrefix} Found ${categories.length} categories from exploreUrl.`);
             res.status(200).json({ success: true, categories });

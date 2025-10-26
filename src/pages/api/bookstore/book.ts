@@ -40,8 +40,72 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return res.status(501).json({ success: false, error: `Book source '${source.name}' is missing parsing rules for book details or table of contents.` });
         }
         
-        // 解析Legado格式的URL和请求配置 (URL,{options})
-        const parsedUrl = parseUrlWithOptions(url);
+        // 🔧 先检查是否是相对路径，如果是则先补全，再解析options
+        let fullUrl = url;
+        
+        // 提取URL部分（可能包含,{options}）
+        const urlMatch = url.match(/^([^,]+)/);
+        const urlPart = urlMatch ? urlMatch[1].trim() : url;
+        
+        if (!urlPart.startsWith('http://') && !urlPart.startsWith('https://')) {
+            // 从 loginUrl 或 jsLib 中提取服务器列表
+            const getHostsFromComment = (comment: string = '', jsLib: string = '', loginUrl: string = ''): string[] => {
+                const combinedScript = `${comment}\n${jsLib}\n${loginUrl}`;
+                
+                // 方法1: 查找 const host = [...]
+                let match = combinedScript.match(/const\s+host\s*=\s*(\[[\s\S]*?\])/);
+                if (match && match[1]) {
+                    try {
+                        const { VM } = require('vm2');
+                        const vm = new VM();
+                        return vm.run(`module.exports = ${match[1]};`);
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+                
+                // 方法2: 查找 encodedEndpoints（大灰狼书源格式）
+                match = combinedScript.match(/const\s+encodedEndpoints\s*=\s*\[([\s\S]*?)\];/);
+                if (match && match[1]) {
+                    try {
+                        const base64Strings = match[1].match(/'([^']+)'/g) || [];
+                        const decodedHosts = base64Strings
+                            .map(s => s.replace(/'/g, '').trim())
+                            .filter(s => s.length > 0)
+                            .map(b64 => {
+                                try {
+                                    return Buffer.from(b64, 'base64').toString('utf-8');
+                                } catch (e) {
+                                    return null;
+                                }
+                            })
+                            .filter(h => h && (h.startsWith('http://') || h.startsWith('https://')));
+                        
+                        if (decodedHosts.length > 0) {
+                            return decodedHosts as string[];
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+                
+                return [];
+            };
+            
+            const hosts = getHostsFromComment(source.comment, source.jsLib, source.loginUrl);
+            if (hosts.length > 0) {
+                const baseUrl = hosts[0];
+                // 替换URL部分，保留options部分
+                fullUrl = baseUrl + urlPart + url.substring(urlPart.length);
+                console.log(`${logPrefix} 补全相对路径URL: ${fullUrl}`);
+            } else {
+                console.error(`${logPrefix} 无法补全相对路径URL，未找到服务器地址`);
+                return res.status(400).json({ success: false, error: `书源配置错误：URL是相对路径（${urlPart}），但未找到服务器地址` });
+            }
+        }
+        
+        // 现在解析完整的URL和请求配置
+        const parsedUrl = parseUrlWithOptions(fullUrl);
         let detailUrl = parsedUrl.url;
         console.log(`${logPrefix} Parsed request options:`, { method: parsedUrl.method, hasBody: !!parsedUrl.body, extraHeaders: Object.keys(parsedUrl.headers || {}) });
         
@@ -61,12 +125,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ...(parsedUrl.headers || {}), // URL中指定的headers优先级更高
             ...(cookieHeader ? { cookie: cookieHeader } : {}),
         };
+        // 兼容大灰狼服务端要求
+        try { if (new URL(detailUrl).hostname.includes('langge')) (mergedHeaders as any)['versiontype'] = (mergedHeaders as any)['versiontype'] || 'reading'; } catch {}
         
         // 构建完整的请求配置
         const requestOptions = buildRequestInit(parsedUrl, mergedHeaders);
         console.log(`${logPrefix} Final request config:`, { method: requestOptions.method, headers: Object.keys(requestOptions.headers as any), hasBody: !!requestOptions.body });
         
-        const response = await fetch(rewriteViaProxyBase(detailUrl, source.proxyBase), requestOptions);
+        const response = await fetch(rewriteViaProxyBase(detailUrl, source.proxyBase), { ...requestOptions, signal: AbortSignal.timeout(700000) });
         console.log(`${logPrefix} Fetched with status: ${response.status}`);
         if (!response.ok) {
             throw new Error(`Failed to fetch book detail from ${detailUrl}. Status: ${response.status}`);
@@ -80,6 +146,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             initResult = html;
         }
 
+        // 检查API是否返回错误
+        if (typeof initResult === 'object' && initResult && 'code' in initResult && initResult.code !== 0) {
+            const errorMsg = initResult.msg || initResult.message || '未知错误';
+            console.error(`${logPrefix} API返回错误: code=${initResult.code}, msg=${errorMsg}`);
+            return res.status(400).json({ 
+                success: false, 
+                error: `书源API返回错误: ${errorMsg}`,
+                details: `请检查书源配置或服务器状态。完整响应: ${JSON.stringify(initResult).substring(0, 500)}`
+            });
+        }
+        
         if (bookInfoRule.init?.startsWith('$.')) {
             const keys = bookInfoRule.init.substring(2).split('.');
             let value = initResult;
@@ -88,8 +165,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 else { value = undefined; break; }
             }
             initResult = value;
-            console.log(`${logPrefix} Ran init rule, result is now:`, typeof initResult);
+            console.log(`${logPrefix} Ran init rule "${bookInfoRule.init}", result is now:`, typeof initResult, initResult ? JSON.stringify(initResult).substring(0, 200) : 'null/undefined');
+            
+            // 如果init规则执行后结果为null/undefined，说明数据结构不对
+            if (!initResult) {
+                console.error(`${logPrefix} init规则执行后结果为空，原始数据:`, JSON.stringify(JSON.parse(html)).substring(0, 500));
+                return res.status(400).json({
+                    success: false,
+                    error: '书源数据解析失败',
+                    details: `init规则"${bookInfoRule.init}"执行后结果为空，请检查API返回的数据结构`
+                });
+            }
         }
+        
+        // 创建一个共享的变量存储，用于 java.put/get
+        const sharedVariables: Record<string, any> = {};
         
         const tocUrlRaw = bookInfoRule.tocUrl || '';
         // tocUrl可能包含@js:，需要先提取CSS选择器部分
@@ -108,7 +198,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 console.log(`${logPrefix} ToC URL (CSS+JS处理): ${tocUrlToEvaluate}`);
             }
         } else {
-            tocUrlToEvaluate = await evaluateJs(tocUrlRaw, { source, result: initResult, key: url });
+            // 创建增强的context，包含共享变量存储
+            const contextWithShared = { 
+                source, 
+                result: initResult, 
+                key: url,
+                sharedVariables  // 传递共享变量
+            };
+            tocUrlToEvaluate = await evaluateJs(tocUrlRaw, contextWithShared);
         }
         
         // 解析 @get:{path} 占位（从 initResult 对象取值）
@@ -163,6 +260,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                         headers: { ...tocRequestOptions.headers, ...options.headers },
                         body: options.body
                     }
+                    // 若为POST且body为urlencoded字符串，自动补上Content-Type
+                    if ((tocRequestOptions.method || 'GET').toString().toUpperCase() === 'POST') {
+                        const hasCT = Object.keys((tocRequestOptions.headers || {})).some(k => k.toLowerCase() === 'content-type');
+                        if (!hasCT && typeof tocRequestOptions.body === 'string') {
+                            (tocRequestOptions.headers as any) = { ...(tocRequestOptions.headers as any), 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' };
+                        }
+                    }
                 } catch (e) {
                     console.warn(`${logPrefix} 无法解析ToC请求选项，使用默认配置`);
                 }
@@ -176,6 +280,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     ...(tocRequestOptions.headers as any),
                     ...(tocCookie ? { cookie: tocCookie } : {}),
                 };
+                try { if (new URL(finalTocUrl).hostname.includes('langge')) (tocMergedHeaders as any)['versiontype'] = (tocMergedHeaders as any)['versiontype'] || 'reading'; } catch {}
                 const tocResponse = await fetch(rewriteViaProxyBase(finalTocUrl, source.proxyBase), { ...tocRequestOptions, headers: tocMergedHeaders });
                 console.log(`${logPrefix} Fetched ToC with status: ${tocResponse.status}`);
                 if (tocResponse.ok) {
@@ -199,7 +304,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const preUpdateJs = source.rules?.toc?.preUpdateJs;
         if (preUpdateJs && preUpdateJs.startsWith('<js>')) {
             try {
-                const modified = await evaluateJs(preUpdateJs, { source, result: tocHtml });
+                const modified = await evaluateJs(preUpdateJs, { source, result: tocHtml, sharedVariables });
                 if (typeof modified === 'string' && modified.length > 0) {
                     tocHtml = modified;
                 }
@@ -245,12 +350,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
         }
         
-        chapters = await Promise.all(chapters.map(async (chapter) => {
+        chapters = await Promise.all(chapters.map(async (chapter, idx) => {
             if (chapter.url && chapter.url.startsWith('<js>')) {
-                chapter.url = await evaluateJs(chapter.url, { source, result: chapter, key: chapter.title });
+                chapter.url = await evaluateJs(chapter.url, { source, result: chapter, key: chapter.title, sharedVariables: {} });
             }
             return chapter;
         }));
+
+        // Fallback: 若解析后全部被过滤为空，但接口 JSON 存在 data 数组，则直接基于 JSON 构建章节
+        try {
+            const asObj = typeof tocHtml === 'string' ? JSON.parse(tocHtml) : tocHtml;
+            if (Array.isArray(asObj?.data) && asObj.data.length > 0) {
+                const before = chapters.length;
+                if (before === 0) {
+                    console.log(`${logPrefix} Chapters empty after first-pass. Using JSON fallback to build chapters...`);
+                    const built = await Promise.all(asObj.data.map(async (item: any) => {
+                        let url = '';
+                        try {
+                            url = await evaluateJs(tocRule.chapterUrl || '', { source, result: item, key: item?.title || '' });
+                        } catch {}
+                        return {
+                            title: String(item?.title || ''),
+                            url,
+                            intro: String(item?.chapterintro || item?.intro || ''),
+                        };
+                    }));
+                    chapters = built.filter(ch => typeof ch.url === 'string' && ch.url.trim() && typeof ch.title === 'string' && ch.title.trim());
+                }
+            }
+        } catch {}
 
         // 过滤无效章节（没有有效URL或标题的，如卷分隔项）并去重
         const seen = new Set<string>();

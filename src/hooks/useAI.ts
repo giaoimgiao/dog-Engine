@@ -44,7 +44,12 @@ export function useAI() {
             });
             return result;
         } catch (err: any) {
-            const errorMessage = err.message || '生成内容失败';
+            const code = err?.code || err?.name || '';
+            const providerIdOrMsg = err?.providerId ? `（${err.providerId}）` : '';
+            let errorMessage = err.message || '生成内容失败';
+            if (code === 'MISSING_API_KEY' || /MISSING_API_KEY/.test(errorMessage)) {
+                errorMessage = `所选提供商缺少API密钥${providerIdOrMsg}，请在右上角「AI配置」中填写密钥并重试。`;
+            }
             setError(errorMessage);
             throw new Error(errorMessage);
         } finally {
@@ -85,7 +90,12 @@ export function useAI() {
                 yield chunk;
             }
         } catch (err: any) {
-            const errorMessage = err.message || '生成内容失败';
+            const code = err?.code || err?.name || '';
+            const providerIdOrMsg = err?.providerId ? `（${err.providerId}）` : '';
+            let errorMessage = err.message || '生成内容失败';
+            if (code === 'MISSING_API_KEY' || /MISSING_API_KEY/.test(errorMessage)) {
+                errorMessage = `所选提供商缺少API密钥${providerIdOrMsg}，请在右上角「AI配置」中填写密钥并重试。`;
+            }
             setError(errorMessage);
             throw new Error(errorMessage);
         } finally {

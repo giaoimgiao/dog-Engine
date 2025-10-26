@@ -27,6 +27,8 @@ export interface WorldSetting {
   keyword: string;
   description: string;
   enabled: boolean;
+  /** 关联到书架中其他书籍的ID列表（用于跨书共享） */
+  linkedBookIds?: string[];
 }
 
 export interface Character {
@@ -34,6 +36,16 @@ export interface Character {
   name: string;
   description: string;
   enabled: boolean;
+  /** 关联到书架中其他书籍的ID列表（用于跨书共享） */
+  linkedBookIds?: string[];
+  /** 角色别名（用于实体对齐与去重） */
+  aliases?: string[];
+  /** 首次/最近出现的章节ID（用于回溯与排序） */
+  originChapterIds?: string[];
+  /** 规范化后的主名（实体对齐使用，不展示） */
+  canonicalName?: string;
+  /** 合并历史记录（被合并来源的ID列表） */
+  mergeHistory?: string[];
 }
 
 export type ReviewResult = ReviewManuscriptOutput;
@@ -524,4 +536,18 @@ export interface AIGenerateResponse {
   };
   /** 错误信息（如果有） */
   error?: AIErrorInfo;
+}
+
+/**
+ * 豆包图片生成所需配置
+ */
+export interface DoubaoConfig {
+  COOKIE: string;
+  X_MS_TOKEN: string;
+  DEVICE_ID: string;
+  TEA_UUID: string;
+  WEB_ID: string;
+  MS_TOKEN: string;
+  A_BOGUS: string;
+  ROOM_ID: string;
 }
