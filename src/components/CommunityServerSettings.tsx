@@ -5,22 +5,47 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { KeyRound, Server } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { getCommunityBase, setCommunityBase, getCommunityToken, setCommunityToken, clearCommunityToken, communityLogin, communityRegister } from '@/lib/community-remote';
 
+// 预设的服务器端口选项
+const SERVER_PORTS = [
+  { value: '8080', label: '8080 (默认)' },
+  { value: '8880', label: '8880' },
+  { value: '9990', label: '9990' },
+];
+
 export default function CommunityServerSettings() {
   const [open, setOpen] = useState(false);
-  const [base, setBase] = useState('http://47.95.220.140');
+  const [serverHost, setServerHost] = useState('47.95.220.140');
+  const [serverPort, setServerPort] = useState('8080');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [token, setToken] = useState<string | null>(null);
   const { toast } = useToast();
+  
+  // 组合完整的服务器地址
+  const base = `http://${serverHost}:${serverPort}`;
 
   useEffect(() => {
     const savedBase = getCommunityBase();
     const savedToken = getCommunityToken();
-    if (savedBase) setBase(savedBase);
+    
+    // 解析保存的服务器地址
+    if (savedBase) {
+      try {
+        const url = new URL(savedBase);
+        setServerHost(url.hostname);
+        setServerPort(url.port || '8080');
+      } catch {
+        // 如果解析失败，使用默认值
+        setServerHost('47.95.220.140');
+        setServerPort('8080');
+      }
+    }
+    
     setToken(savedToken);
   }, [open]);
 
@@ -67,12 +92,37 @@ export default function CommunityServerSettings() {
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
           <DialogTitle>社区服务器</DialogTitle>
-          <DialogDescription>配置远程社区服务器地址并登录账户。默认服务器：47.95.220.140</DialogDescription>
+          <DialogDescription>配置远程社区服务器地址并登录账户。默认服务器：47.95.220.140:8080</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
-          <div className="space-y-2">
-            <Label htmlFor="base">服务器地址</Label>
-            <Input id="base" value={base} onChange={(e) => setBase(e.target.value)} placeholder="http://47.95.220.140" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="serverHost">服务器IP</Label>
+              <Input 
+                id="serverHost" 
+                value={serverHost} 
+                onChange={(e) => setServerHost(e.target.value)} 
+                placeholder="47.95.220.140" 
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="serverPort">端口</Label>
+              <Select value={serverPort} onValueChange={setServerPort}>
+                <SelectTrigger id="serverPort">
+                  <SelectValue placeholder="选择端口" />
+                </SelectTrigger>
+                <SelectContent>
+                  {SERVER_PORTS.map(port => (
+                    <SelectItem key={port.value} value={port.value}>
+                      {port.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded">
+            完整地址：{base}
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">

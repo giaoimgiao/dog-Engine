@@ -134,6 +134,11 @@ function ProviderForm({
             // OpenAI 兼容模板
             const preset = OPENAI_COMPATIBLE_CONFIGS[presetKey as keyof typeof OPENAI_COMPATIBLE_CONFIGS];
             if (preset) {
+                // 安全地访问可选的 customHeaders 属性
+                const customHeadersStr = ('customHeaders' in preset && preset.customHeaders) 
+                    ? JSON.stringify(preset.customHeaders, null, 2) 
+                    : '';
+                
                 setFormData(prev => ({
                     ...prev,
                     name: preset.name,
@@ -141,7 +146,7 @@ function ProviderForm({
                     type: 'openai',
                     apiUrl: preset.apiUrl,
                     defaultModel: preset.defaultModel,
-                    customHeaders: preset.customHeaders ? JSON.stringify(preset.customHeaders, null, 2) : '',
+                    customHeaders: customHeadersStr,
                 }));
             }
         }
@@ -609,12 +614,43 @@ export function AIProviderSettings({
 
     const copyApiKey = async (apiKey: string) => {
         try {
-            await navigator.clipboard.writeText(apiKey);
+            // 优先使用现代 Clipboard API
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(apiKey);
+                toast({
+                    title: '已复制到剪贴板',
+                });
+            } else {
+                // 降级方案：使用传统方法
+                const textArea = document.createElement('textarea');
+                textArea.value = apiKey;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-999999px';
+                textArea.style.top = '-999999px';
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    toast({
+                        title: '已复制到剪贴板',
+                    });
+                } catch (err) {
+                    toast({
+                        title: '复制失败',
+                        description: '请手动复制 API 密钥',
+                        variant: 'destructive',
+                    });
+                }
+                document.body.removeChild(textArea);
+            }
+        } catch (error) {
+            console.error('Copy failed:', error);
             toast({
-                title: '已复制到剪贴板',
+                title: '复制失败',
+                description: '请手动复制 API 密钥',
+                variant: 'destructive',
             });
-        } catch {
-            // 忽略复制失败
         }
     };
 

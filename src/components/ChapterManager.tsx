@@ -4,6 +4,7 @@ import type { Book, Chapter, CommunityPrompt } from '@/lib/types';
 import { Button } from './ui/button';
 import { Plus, Trash2, FileText, Edit, Download, Copy, Bot, Users, Loader2, WandSparkles } from 'lucide-react';
 import { cn, generateUUID } from '@/lib/utils';
+import { useIsMobile } from '@/hooks/use-mobile';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -47,6 +48,7 @@ interface ChapterManagerProps {
 
 export default function ChapterManager({ book, updateBook, activeChapter, setActiveChapter }: ChapterManagerProps) {
   const { toast } = useToast();
+  const isMobile = useIsMobile();
   const [isRenaming, setIsRenaming] = useState<Chapter | null>(null);
   const [newChapterTitle, setNewChapterTitle] = useState('');
   
@@ -268,14 +270,14 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
   return (
     <div className="flex flex-col h-full">
         <div className="p-2 flex-shrink-0">
-            <Button onClick={handleAddChapter} className="w-full">
+            <Button onClick={handleAddChapter} className="w-full" size={isMobile ? "sm" : "default"}>
                 <Plus className="mr-2 h-4 w-4" />
                 新建章节
             </Button>
         </div>
         <div className="flex-grow overflow-y-auto">
             {book.chapters.length > 0 ? (
-                <ul className="space-y-1 p-2">
+                <ul className={isMobile ? "space-y-0.5 p-1" : "space-y-1 p-2"}>
                 {book.chapters.map((chapter) => (
                     <li key={chapter.id}>
                     <div
@@ -284,29 +286,36 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
                         onClick={() => setActiveChapter(chapter)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setActiveChapter(chapter); }}
                         className={cn(
-                        'w-full text-left p-2 rounded-md flex items-center justify-between group cursor-pointer',
+                        'w-full text-left rounded-md flex items-center justify-between group cursor-pointer transition-colors',
+                        isMobile ? 'p-3 text-sm' : 'p-2',
                         activeChapter?.id === chapter.id
                             ? 'bg-primary/20 text-primary-foreground'
                             : 'hover:bg-accent/50'
                         )}
                     >
-                        <span className="truncate pr-2">{chapter.title}</span>
-                        <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                        <span className="truncate pr-2 flex-1 min-w-0">{chapter.title}</span>
+                        <div className={cn(
+                          "flex items-center flex-shrink-0",
+                          isMobile ? "opacity-100" : "opacity-0 group-hover:opacity-100 transition-opacity"
+                        )}>
                            {chapter.url && book.sourceId && (
-                             <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => openFetchDialog(chapter, e)} title="抓取章节内容">
-                                <Download className="h-4 w-4" />
+                             <Button variant="ghost" size="icon" className={isMobile ? "h-8 w-8" : "h-6 w-6"} onClick={(e) => openFetchDialog(chapter, e)} title="抓取章节内容">
+                                <Download className="h-3.5 w-3.5" />
                               </Button>
                            )}
-                           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={(e) => openRenameDialog(chapter, e)}>
-                                <Edit className="h-4 w-4" />
+                           <Button variant="ghost" size="icon" className={isMobile ? "h-8 w-8" : "h-6 w-6"} onClick={(e) => openRenameDialog(chapter, e)}>
+                                <Edit className="h-3.5 w-3.5" />
                             </Button>
                             <AlertDialog>
                                 <AlertDialogTrigger asChild onClick={(e) => e.stopPropagation()}>
-                                    <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive/70 hover:text-destructive hover:bg-destructive/10">
-                                        <Trash2 className="h-4 w-4" />
+                                    <Button variant="ghost" size="icon" className={cn(
+                                      "text-destructive/70 hover:text-destructive hover:bg-destructive/10",
+                                      isMobile ? "h-8 w-8" : "h-6 w-6"
+                                    )}>
+                                        <Trash2 className="h-3.5 w-3.5" />
                                     </Button>
                                 </AlertDialogTrigger>
-                                <AlertDialogContent>
+                                <AlertDialogContent className={isMobile ? "w-[90vw]" : ""}>
                                     <AlertDialogHeader>
                                     <AlertDialogTitle>确定要删除此章节吗？</AlertDialogTitle>
                                     <AlertDialogDescription>
@@ -333,7 +342,7 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
 
         {/* Rename Dialog */}
         <Dialog open={!!isRenaming} onOpenChange={(open) => !open && handleCloseRenameDialog()}>
-            <DialogContent>
+            <DialogContent className={isMobile ? "w-[90vw]" : ""}>
                 <DialogHeader>
                     <DialogTitle>重命名章节</DialogTitle>
                 </DialogHeader>
@@ -352,7 +361,7 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
 
         {/* Fetch Dialog */}
         <Dialog open={!!fetchDialogChapter} onOpenChange={(open) => !open && closeFetchDialog()}>
-            <DialogContent className="max-w-4xl">
+            <DialogContent className={isMobile ? "w-full h-full max-w-full p-4" : "max-w-4xl"}>
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2 justify-between">
                         <div className="flex items-center gap-2">

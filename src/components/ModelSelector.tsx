@@ -65,10 +65,14 @@ export function ModelSelector({
 
     // 当选中的提供商变化时，加载对应的模型列表
     useEffect(() => {
-        if (selectedProviderId && !providerModels[selectedProviderId]?.models.length && !providerModels[selectedProviderId]?.loading) {
+        if (!selectedProviderId) return;
+        const provider = providers.find(p => p.id === selectedProviderId);
+        if (!provider) return; // 选中的是无效/未配置的提供商，直接跳过
+        const current = providerModels[selectedProviderId];
+        if (!current?.models.length && !current?.loading && !current?.error) {
             loadModelsForProvider(selectedProviderId);
         }
-    }, [selectedProviderId, providerModels]);
+    }, [selectedProviderId, providerModels, providers]);
 
     // 组件挂载时，如果已有选中的提供商但没有模型数据，强制加载
     useEffect(() => {
@@ -80,7 +84,12 @@ export function ModelSelector({
     const loadProviders = () => {
         try {
             setIsLoadingProviders(true);
-            const configs = AIConfigManager.getEnabledProviders();
+
+
+            // 仅展示已启用且已配置API密钥的提供商，避免未配置导致的错误与死循环
+            const configs = AIConfigManager
+                .getEnabledProviders()
+                .filter(p => (p.apiKey || '').trim().length > 0);
             setProviders(configs);
             
             // 如果没有选中的提供商，自动选择第一个
@@ -106,6 +115,25 @@ export function ModelSelector({
     const loadModelsForProvider = async (providerId: string) => {
         const provider = providers.find(p => p.id === providerId);
         if (!provider) return;
+
+        // 若未配置API密钥，直接提示并缓存错误，避免重复触发加载
+        if (!provider.apiKey || provider.apiKey.trim().length === 0) {
+            setProviderModels(prev => ({
+                ...prev,
+                [providerId]: {
+                    provider,
+                    models: [],
+                    loading: false,
+                    error: '请先配置API密钥',
+                },
+            }));
+            toast({
+                title: '加载模型列表失败',
+                description: `${provider.displayName}: 请先配置API密钥`,
+                variant: 'destructive',
+            });
+            return;
+        }
 
         // 设置加载状态
         setProviderModels(prev => ({
@@ -169,7 +197,7 @@ export function ModelSelector({
         onModelChange(''); // 清空模型选择
         
         // 加载新提供商的模型列表
-        if (!providerModels[providerId]?.models.length && !providerModels[providerId]?.loading) {
+        if (!providerModels[providerId]?.models.length && !providerModels[providerId]?.loading && !providerModels[providerId]?.error) {
             loadModelsForProvider(providerId);
         }
     };
@@ -185,10 +213,24 @@ export function ModelSelector({
     const selectedModel = currentProviderModels?.models.find(m => m.id === selectedModelId);
 
     const formatModelDisplayName = (model: AIModel) => {
-        let name = model.displayName || model.name;
+        // 使用显示名称或处理模型名称（如果太长则截断）
+        let name = model.displayName;
+        if (!name) {
+            // 如果没有显示名称，从模型ID中提取简短版本
+            const parts = model.name.split('-');
+            if (parts.length > 3) {
+                // 对于很长的名称，只保留关键部分
+                name = parts.slice(-5).join('-'); // 取最后3个部分
+            } else {
+                name = model.name;
+            }
+        }
+        
+        // 添加token信息
         if (model.maxTokens) {
             name += ` (${(model.maxTokens / 1000).toFixed(0)}K)`;
         }
+        
         return name;
     };
 
@@ -207,7 +249,7 @@ export function ModelSelector({
                     onValueChange={handleProviderChange}
                     disabled={disabled || isLoadingProviders}
                 >
-                    <SelectTrigger className="w-[140px]">
+                    <SelectTrigger className="w-[120px]">
                         <SelectValue placeholder="选择提供商" />
                     </SelectTrigger>
                     <SelectContent>
@@ -227,14 +269,20 @@ export function ModelSelector({
                     onValueChange={onModelChange}
                     disabled={disabled || !selectedProviderId || currentProviderModels?.loading}
                 >
-                    <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="选择模型" />
+                    <SelectTrigger className="flex-1 max-w-[180px] overflow-hidden">
+                        <SelectValue placeholder="选择模型">
+                            {selectedModel && (
+                                <span className="truncate block max-w-[160px]">
+                                    {selectedModel.displayName || selectedModel.name.split('-').slice(-2).join('-')}
+                                </span>
+                            )}
+                        </SelectValue>
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="min-w-[220px]">
                         {currentProviderModels?.models.map(model => (
                             <SelectItem key={model.id} value={model.id}>
                                 <div className="flex items-center justify-between w-full">
-                                    <span className="truncate">{formatModelDisplayName(model)}</span>
+                                    <span className="truncate max-w-[160px]">{formatModelDisplayName(model)}</span>
                                     {model.supportStreaming && (
                                         <Badge variant="secondary" className="ml-2 text-xs">流式</Badge>
                                     )}
