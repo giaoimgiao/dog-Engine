@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Search, Flame, Tag, BookText, ChevronRight } from 'lucide-react';
 import type { BookstoreBook, BookstoreCategory, BookSource } from '@/lib/types';
 import { DeconstructOutline } from '@/components/DeconstructOutline';
+import { BookSourceSettings } from '@/components/BookSourceSettings';
 import Image from 'next/image';
 import {
   Select,
@@ -259,7 +260,25 @@ export default function BookstorePage() {
                                     </SelectContent>
                                 </Select>
                             </div>
-                            <Button type="submit" disabled={isLoading} className="w-full h-10">搜索</Button>
+                            <div className="flex gap-2">
+                                {selectedSourceId && enabledSources.find(s => s.id === selectedSourceId) && (
+                                    <BookSourceSettings 
+                                        source={enabledSources.find(s => s.id === selectedSourceId)!}
+                                        onSettingsChange={() => {
+                                            // 重新加载数据
+                                            const source = enabledSources.find(s => s.id === selectedSourceId);
+                                            if (source) {
+                                                setIsLoading(true);
+                                                setTimeout(() => {
+                                                    setSelectedSourceId('');
+                                                    setTimeout(() => setSelectedSourceId(source.id), 100);
+                                                }, 100);
+                                            }
+                                        }}
+                                    />
+                                )}
+                                <Button type="submit" disabled={isLoading} className="flex-1 h-10">搜索</Button>
+                            </div>
                         </div>
                     </form>
                 </div>

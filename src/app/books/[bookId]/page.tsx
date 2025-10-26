@@ -7,27 +7,36 @@ import { useEffect, useState, useMemo } from 'react';
 import Header from '@/components/Header';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
-import { Globe, Users, FileText } from 'lucide-react';
+import { Globe, Users, FileText, Menu, BookOpen } from 'lucide-react';
 import ChapterManager from '@/components/ChapterManager';
 import Editor from '@/components/Editor';
 import WorldBookManager from '@/components/WorldBookManager';
 import CharacterCardManager from '@/components/CharacterCardManager';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 export default function BookPage() {
   const router = useRouter();
   const params = useParams();
-  const bookId = params.bookId as string;
+  const bookId = params?.bookId as string;
+  const isMobile = useIsMobile();
 
   const [books, setBooks] = useLocalStorage<Book[]>('books', []);
-  const [worldSettings, setWorldSettings] = useLocalStorage<WorldSetting[]>('worldSettings', []);
-  const [characters, setCharacters] = useLocalStorage<Character[]>('characters', []);
+  // 关键修复：角色卡/世界书按书ID分桶存储，避免跨书互相污染
+  const [worldSettings, setWorldSettings] = useLocalStorage<WorldSetting[]>(`worldSettings:${bookId}`, []);
+  const [characters, setCharacters] = useLocalStorage<Character[]>(`characterCards:${bookId}`, []);
   
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
+  const [isChapterSheetOpen, setIsChapterSheetOpen] = useState(false);
 
   // Lifted state for AI Assistant
-  const [aiRole, setAiRole] = useState('一个有创意的故事作家');
-  const [aiRoleDisplay, setAiRoleDisplay] = useState('一个有创意的故事作家');
+  const DEFAULT_AI_ROLE = `你是一个擅长爽点设计与反转的网文作者，精于承接前文并自然引出下一章的冲突与悬念。请基于上文续写"下一章"的首稿，要求：
+- 保持已有设定与角色性格一致
+- 设计清晰的段落推进（起→承→转→合）
+- 至少给出1个强悬念或爆点（以结尾埋钩）
+- 语言保持网文节奏，短句为主，镜头感强`;
+  const [aiRole, setAiRole] = useState(DEFAULT_AI_ROLE);
+  const [aiRoleDisplay, setAiRoleDisplay] = useState('爽点设计与反转的网文作家');
 
 
   const currentBook = useMemo(() => {
@@ -114,25 +123,56 @@ export default function BookPage() {
   return (
     <div className="flex flex-col h-screen bg-background">
       <Header>
-          <div className="flex items-center gap-2 mr-auto ml-4">
-              <h1 className="text-xl font-bold font-headline truncate" title={currentBook.title}>{currentBook.title}</h1>
+          <div className="flex items-center gap-2 mr-auto ml-2 sm:ml-4 min-w-0">
+              {isMobile && (
+                <Sheet open={isChapterSheetOpen} onOpenChange={setIsChapterSheetOpen}>
+                  <SheetTrigger asChild>
+                    <Button variant="ghost" size="icon" className="flex-shrink-0">
+                      <Menu className="h-5 w-5" />
+                    </Button>
+                  </SheetTrigger>
+                  <SheetContent side="left" className="w-[280px] p-0">
+                    <SheetHeader className="px-4 py-3 border-b">
+                      <SheetTitle className='font-headline'>章节列表</SheetTitle>
+                    </SheetHeader>
+                    <div className="overflow-y-auto p-2" style={{height: 'calc(100vh - 60px)'}}>
+                      <ChapterManager 
+                        book={currentBook}
+                        updateBook={updateBook}
+                        activeChapter={activeChapter}
+                        setActiveChapter={(chapter) => {
+                          setActiveChapter(chapter);
+                          setIsChapterSheetOpen(false);
+                        }}
+                      />
+                    </div>
+                  </SheetContent>
+                </Sheet>
+              )}
+              <h1 className="text-base sm:text-xl font-bold font-headline truncate" title={currentBook.title}>{currentBook.title}</h1>
           </div>
           <Sheet>
             <SheetTrigger asChild>
-              <Button variant="outline" size="sm"><Globe className="mr-2 h-4 w-4" />世界设定</Button>
+              <Button variant="outline" size={isMobile ? "icon" : "sm"}>
+                <Globe className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
+                {!isMobile && "世界设定"}
+              </Button>
             </SheetTrigger>
-            <SheetContent className="w-[400px] sm:w-[540px] flex flex-col">
+            <SheetContent className="w-[90vw] sm:w-[400px] md:w-[540px] flex flex-col" side={isMobile ? "bottom" : "right"}>
               <SheetHeader>
                 <SheetTitle className='font-headline'>世界书</SheetTitle>
               </SheetHeader>
-              <WorldBookManager worldSettings={worldSettings} setWorldSettings={setWorldSettings} />
+              <WorldBookManager worldSettings={worldSettings} setWorldSettings={setWorldSettings} currentBookId={bookId} />
             </SheetContent>
           </Sheet>
           <Sheet>
             <SheetTrigger asChild>
-              <Button variant="outline" size="sm"><Users className="mr-2 h-4 w-4" />角色卡</Button>
+              <Button variant="outline" size={isMobile ? "icon" : "sm"}>
+                <Users className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
+                {!isMobile && "角色卡"}
+              </Button>
             </SheetTrigger>
-            <SheetContent className="w-[400px] sm:w-[540px] flex flex-col">
+            <SheetContent className="w-[90vw] sm:w-[400px] md:w-[540px] flex flex-col" side={isMobile ? "bottom" : "right"}>
               <SheetHeader>
                 <SheetTitle className='font-headline'>角色卡片</SheetTitle>
               </SheetHeader>
@@ -140,20 +180,23 @@ export default function BookPage() {
                 characters={characters} 
                 setCharacters={setCharacters} 
                 chapters={currentBook.chapters}
+                currentBookId={bookId}
               />
             </SheetContent>
           </Sheet>
       </Header>
       <main className="flex-grow flex overflow-hidden">
-        <div className="w-1/4 lg:w-1/5 border-r overflow-y-auto p-2 bg-card/50">
-           <ChapterManager 
-            book={currentBook}
-            updateBook={updateBook}
-            activeChapter={activeChapter}
-            setActiveChapter={setActiveChapter}
-           />
-        </div>
-        <div className="w-3/4 lg:w-4/5 flex flex-col overflow-hidden">
+        {!isMobile && (
+          <div className="w-1/4 lg:w-1/5 border-r overflow-y-auto p-2 bg-card/50">
+            <ChapterManager 
+              book={currentBook}
+              updateBook={updateBook}
+              activeChapter={activeChapter}
+              setActiveChapter={setActiveChapter}
+            />
+          </div>
+        )}
+        <div className={isMobile ? "w-full flex flex-col overflow-hidden" : "w-3/4 lg:w-4/5 flex flex-col overflow-hidden"}>
           {activeChapter ? (
             <Editor 
               key={activeChapter.id}
@@ -166,10 +209,10 @@ export default function BookPage() {
               setAiRoleDisplay={setAiRoleDisplay}
             />
           ) : (
-            <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground p-8">
-              <FileText className="w-16 h-16 mb-4" />
-              <h2 className="text-2xl font-bold font-headline">没有选择章节</h2>
-              <p className="mt-2">请在左侧选择一个章节进行编辑，或者创建一个新章节。</p>
+            <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground p-4 sm:p-8">
+              <FileText className="w-12 h-12 sm:w-16 sm:h-16 mb-4" />
+              <h2 className="text-xl sm:text-2xl font-bold font-headline">没有选择章节</h2>
+              <p className="mt-2 text-sm sm:text-base">请{isMobile ? "点击左上角菜单" : "在左侧"}选择一个章节进行编辑，或者创建一个新章节。</p>
             </div>
           )}
         </div>

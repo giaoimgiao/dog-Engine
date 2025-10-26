@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 // 轻量级转发器：将来自前端的社区请求转发到公网服务器
 // 服务器地址固定为用户提供的 IP（可改为环境变量）
-const REMOTE_BASE = process.env.COMMUNITY_REMOTE_BASE || 'http://47.95.220.140';
+const REMOTE_BASE = process.env.COMMUNITY_REMOTE_BASE || 'http://47.95.220.140:8080';
 
 export async function POST(req: NextRequest) {
   try {

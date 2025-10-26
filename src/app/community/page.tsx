@@ -234,7 +234,7 @@ export default function CommunityPage() {
                         <h1 className="text-3xl font-bold font-headline">创作社区</h1>
                         <p className="text-muted-foreground mt-1">发现和分享驱动故事的 AI 角色设定</p>
                         <Button asChild variant="outline" size="sm" className="gap-2">
-                          <a href={`${process.env.NEXT_PUBLIC_COMMUNITY_SERVER || 'http://47.95.220.140:8880'}/upload`} target="_blank" rel="noopener noreferrer">
+                          <a href={`${process.env.NEXT_PUBLIC_COMMUNITY_SERVER || 'http://47.95.220.140:8080'}/upload`} target="_blank" rel="noopener noreferrer">
                             <Server className="w-4 h-4" /> 服务器
                           </a>
                         </Button>

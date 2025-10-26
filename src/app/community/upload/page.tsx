@@ -16,7 +16,7 @@ import { getCommunityBase as getBase, setCommunityBase as setBase } from '@/lib/
 
 export default function CommunityUploadPage() {
   const { toast } = useToast();
-  const [base, setBaseState] = useState('http://47.95.220.140');
+  const [base, setBaseState] = useState('http://47.95.220.140:8080');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -92,7 +92,7 @@ export default function CommunityUploadPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2 md:col-span-2">
                 <Label htmlFor="base">服务器地址</Label>
-                <Input id="base" value={base} onChange={(e) => setBaseState(e.target.value)} placeholder="http://47.95.220.140" />
+                <Input id="base" value={base} onChange={(e) => setBaseState(e.target.value)} placeholder="http://47.95.220.140:8080" />
               </div>
               <div className="flex items-end">
                 <Button onClick={handleSaveBase} variant="secondary" className="w-full">保存</Button>
