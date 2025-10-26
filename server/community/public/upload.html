@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Community Upload</title>
+<style>
+  body{font-family:system-ui,Arial;padding:24px;max-width:820px;margin:auto;background:#fafafa}
+  label{display:block;margin:.5rem 0 .25rem}
+  textarea,input{width:100%;padding:.5rem}
+  button{padding:.5rem 1rem;margin-top:1rem}
+  .row{display:flex;gap:12px}
+  .row>*{flex:1}
+  table{width:100%;border-collapse:collapse;margin-top:16px}
+  th,td{border:1px solid #ddd;padding:8px}
+  th{text-align:left;background:#f0f0f0}
+  .muted{color:#888;font-size:12px}
+</style>
+<h1>上传提示词到社区</h1>
+<p>管理员或普通用户登录后发布。默认管理员：giao / zhang666666（可更改）。</p>
+
+<div class="row">
+  <div>
+    <label>服务器健康检查</label>
+    <button onclick="health()">Health</button>
+    <span id="health"></span>
+  </div>
+</div>
+
+<div class="row">
+  <div>
+    <label>用户名</label>
+    <input id="u" />
+  </div>
+  <div>
+    <label>密码</label>
+    <input id="p" type="password" />
+  </div>
+</div>
+<div>
+  <button onclick="register()">注册</button>
+  <button onclick="login()">登录</button>
+  <span id="auth"></span>
+  <span id="role" style="margin-left:8px;color:#888"></span>
+  <span id="tokenWarn" style="margin-left:8px;color:#d33"></span>
+  <hr/>
+</div>
+
+<div>
+  <label>名称</label>
+  <input id="name" />
+  <label>提示词</label>
+  <textarea id="prompt" rows="10"></textarea>
+  <label><input id="visible" type="checkbox" checked/> 公开可见</label>
+  <button onclick="publish()">发布</button>
+  <div id="msg"></div>
+</div>
+
+<h2>已上传角色卡（仅管理员可见）</h2>
+<div class="muted">登录管理员后点击“刷新列表”可查看、编辑、删除</div>
+<button onclick="refresh()">刷新列表</button>
+<table id="list"><thead><tr><th>名称</th><th>内容</th><th>可见</th><th>所有者</th><th>操作</th></tr></thead><tbody></tbody></table>
+
+<script>
+let token = '';
+async function health(){const r=await fetch('/api/community/health');document.getElementById('health').innerText = r.ok?'OK':'FAIL';}
+async function register(){const u=document.getElementById('u').value;const p=document.getElementById('p').value;const r=await fetch('/api/community/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});document.getElementById('auth').innerText= r.ok?'注册成功':'注册失败';}
+async function login(){const u=document.getElementById('u').value;const p=document.getElementById('p').value;const r=await fetch('/api/community/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});const j=await r.json(); if(j.token){token=j.token; document.getElementById('auth').innerText='登录成功'; document.getElementById('role').innerText = j.role ? ('角色:'+j.role) : '';} else {document.getElementById('auth').innerText='登录失败';}}
+async function publish(){if(!token){document.getElementById('tokenWarn').innerText='请先登录';return;}document.getElementById('tokenWarn').innerText='';const name=document.getElementById('name').value;const prompt=document.getElementById('prompt').value;const visible=document.getElementById('visible').checked;const r=await fetch('/api/community/prompts',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({name,prompt,visible})});document.getElementById('msg').innerText = r.ok?'发布成功':'发布失败';}
+async function refresh(){if(!token){document.getElementById('tokenWarn').innerText='请先登录';return;}document.getElementById('tokenWarn').innerText='';const r=await fetch('/api/community/prompts',{headers:{'Authorization':'Bearer '+token}});if(!r.ok){document.getElementById('msg').innerText='获取列表失败(需要管理员权限)';return;}const j=await r.json();const tbody=document.querySelector('#list tbody');tbody.innerHTML='';(j.prompts||[]).forEach(p=>{const tr=document.createElement('tr');tr.innerHTML=`<td><input value="${escapeHtml(p.name)}" data-id="${p.id}" class="n"/></td><td><textarea rows=3 data-id="${p.id}" class="t">${escapeHtml(p.prompt)}</textarea></td><td><input type="checkbox" ${p.visible?'checked':''} data-id="${p.id}" class="v"/></td><td>${p.owner||''}</td><td><button onclick="save('${p.id}')">保存</button><button onclick="del('${p.id}')">删除</button></td>`;tbody.appendChild(tr);});}
+async function save(id){const row=document.querySelector(`#list [data-id='${id}']`).closest('tr');const name=row.querySelector('.n').value;const prompt=row.querySelector('.t').value;const visible=row.querySelector('.v').checked;const r=await fetch(`/api/community/prompts/${id}`,{method:'PUT',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({name,prompt,visible})});document.getElementById('msg').innerText = r.ok?'保存成功':'保存失败';}
+async function del(id){if(!confirm('确定删除?'))return;const r=await fetch(`/api/community/prompts/${id}`,{method:'DELETE',headers:{'Authorization':'Bearer '+token}});document.getElementById('msg').innerText = r.ok?'已删除':'删除失败';if(r.ok) refresh();}
+function escapeHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
+</script>
+
