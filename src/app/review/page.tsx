@@ -31,6 +31,9 @@ export default function ReviewPage() {
   
   const [isLoading, setIsLoading] = useState(false);
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
+  // 流式输出：实时显示审稿内容与动态判定
+  const [liveOutput, setLiveOutput] = useState<string>('');
+  const [liveDecision, setLiveDecision] = useState<'' | '过稿' | '拒稿' | '修订'>('');
 
   // 使用统一AI配置和调用
   const { selectedProviderId, selectedModelId, setSelectedProvider, setSelectedModel } = useAIConfig();
@@ -84,6 +87,8 @@ export default function ReviewPage() {
     
     setIsLoading(true);
     setReviewResult(null);
+    setLiveOutput('');
+    setLiveDecision('');
 
     try {
       const systemInstruction = `你需要扮演一位有签约决策权的资深编辑，基于签约手册审阅来稿并给出清晰结论。
@@ -187,7 +192,13 @@ export default function ReviewPage() {
 
       for await (const chunk of stream) {
         output += chunk;
-        if (!detected) detected = detectDecisionByKeywords(output);
+        // 实时显示
+        setLiveOutput(output);
+        // 实时结论判定（只设置一次明确结论）
+        if (!detected) {
+          detected = detectDecisionByKeywords(output);
+          if (detected) setLiveDecision(detected);
+        }
       }
 
       const decision = detected as any;
@@ -322,6 +333,36 @@ export default function ReviewPage() {
                   </>
                 )}
               </Button>
+
+              {(isLoading || liveOutput) && !reviewResult && (
+                <Card className={`transition-all duration-500 ${liveDecision === '过稿' ? 'bg-green-100/80 dark:bg-green-900/30 border-green-500/50' : liveDecision === '拒稿' ? 'bg-red-100/80 dark:bg-red-900/30 border-red-500/50' : 'bg-muted/40'}`}>
+                  <CardHeader>
+                    <div className="flex items-center gap-4">
+                      {liveDecision === '过稿' ? (
+                        <CheckCircle className="h-10 w-10 text-green-500 flex-shrink-0" />
+                      ) : liveDecision === '拒稿' ? (
+                        <XCircle className="h-10 w-10 text-red-500 flex-shrink-0" />
+                      ) : (
+                        <Loader2 className="h-10 w-10 animate-spin text-primary flex-shrink-0" />
+                      )}
+                      <div>
+                        <CardTitle className="font-headline text-2xl">
+                          {liveDecision ? `审稿结论：${liveDecision}` : '正在审稿...'}
+                        </CardTitle>
+                        <CardDescription>实时生成中，完成后将给出最终结论</CardDescription>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex justify-between items-center">
+                      <Label className='font-headline'>审稿理由（生成中）</Label>
+                    </div>
+                    <div className="p-4 bg-background/50 rounded-md border text-sm text-foreground/80 whitespace-pre-wrap min-h-[120px]">
+                      {liveOutput || '连接中...'}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               {reviewResult && (
                 <Card className={`transition-all duration-500 ${reviewResult.decision === '过稿' ? 'bg-green-100/80 dark:bg-green-900/30 border-green-500/50' : 'bg-red-100/80 dark:bg-red-900/30 border-red-500/50'}`}>
