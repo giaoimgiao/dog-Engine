@@ -361,8 +361,9 @@ export default function CharacterCardManager({ characters, setCharacters, chapte
           }
           
           setIsStreaming(false);
+          setRawOutput(fullOutput);
           
-          // 解析结果
+          // 解析结果（更强兼容）
           const tryParseArray = (text: string): Array<{ name: string; description: string }> => {
             try { return JSON.parse(text.trim()); } catch {}
             try {
@@ -388,6 +389,117 @@ export default function CharacterCardManager({ characters, setCharacters, chapte
                 if (obj && (obj.name || obj.description)) return [obj];
               }
             } catch {}
+            
+            // 进一步修复常见的“未转义引号”等问题，然后再尝试一次
+            try {
+              const normalizeJsonLike = (input: string): string => {
+                let t = input.trim();
+                // 去代码块围栏
+                t = t.replace(/```[a-zA-Z]*\n([\s\S]*?)```/g, '$1');
+                // 裁剪到可能的数组/对象区间
+                const lbr = t.indexOf('[');
+                const rbr = t.lastIndexOf(']');
+                const lcb = t.indexOf('{');
+                const rcb = t.lastIndexOf('}');
+                if (lbr !== -1 && rbr > lbr) t = t.slice(lbr, rbr + 1);
+                else if (lcb !== -1 && rcb > lcb) t = `[${t.slice(lcb, rcb + 1)}]`;
+                // 统一中文引号为英文
+                t = t.replace(/[“”]/g, '"');
+                // 在不进入字符串的前提下，将全角逗号/冒号/分号替换为半角
+                {
+                  let out = '';
+                  let inStr = false;
+                  let esc = false;
+                  for (let i = 0; i < t.length; i++) {
+                    const ch = t[i];
+                    if (inStr) {
+                      out += ch;
+                      if (esc) { esc = false; continue; }
+                      if (ch === '\\') { esc = true; continue; }
+                      if (ch === '"') { inStr = false; }
+                      continue;
+                    }
+                    if (ch === '"') { inStr = true; out += ch; continue; }
+                    if (ch === '，') { out += ','; continue; }
+                    if (ch === '：') { out += ':'; continue; }
+                    if (ch === '；') { out += ','; continue; }
+                    out += ch;
+                  }
+                  t = out;
+                }
+                // 移除尾随逗号
+                t = t.replace(/,\s*([\]}])/g, '$1');
+                return t;
+              };
+              const fixed = normalizeJsonLike(text);
+              const arr = JSON.parse(fixed);
+              if (Array.isArray(arr)) return arr;
+            } catch {}
+
+            // 兜底1：从近似JSON文本中粗略提取 name/description 键值（逐字符扫描，支持多行字符串）
+            try {
+              const items: Array<{ name: string; description: string }> = [];
+              const src = text;
+              const findAll = (hay: string, needle: string): number[] => {
+                const idxs: number[] = [];
+                let p = 0;
+                while (true) {
+                  const i = hay.indexOf(needle, p);
+                  if (i === -1) break;
+                  idxs.push(i);
+                  p = i + needle.length;
+                }
+                return idxs;
+              };
+              // 读取引号包裹字符串（支持换行、转义）
+              const readQuoted = (s: string, start: number): { value: string; end: number } | null => {
+                let i = start + 1; // 跳过开引号
+                let out = '';
+                let esc = false;
+                for (; i < s.length; i++) {
+                  const ch = s[i];
+                  if (esc) { out += ch; esc = false; continue; }
+                  if (ch === '\\') { esc = true; continue; }
+                  if (ch === '"') { return { value: out, end: i }; }
+                  out += ch; // 允许换行等所有字符
+                }
+                return null;
+              };
+              const namePositions = findAll(src, '"name"');
+              for (const pos of namePositions) {
+                const q1 = src.indexOf('"', src.indexOf(':', pos) + 1);
+                if (q1 === -1) continue;
+                const nameToken = readQuoted(src, q1);
+                if (!nameToken) continue;
+
+                // 查找 description 起点（在本对象内）
+                const descKey = src.indexOf('"description"', nameToken.end);
+                if (descKey === -1) continue;
+                const dq = src.indexOf('"', src.indexOf(':', descKey) + 1);
+                if (dq === -1) continue;
+                const descToken = readQuoted(src, dq);
+                if (!descToken) continue;
+                items.push({ name: nameToken.value.trim(), description: descToken.value.trim() });
+              }
+              if (items.length > 0) return items;
+            } catch {}
+
+            // 兜底2：纯正则暴力匹配 "name"\s*[:：]\s*"(...)"\s*.*?\s*"description"\s*[:：]\s*"(...)"
+            try {
+              const items: Array<{ name: string; description: string }> = [];
+              // 匹配 "name" 后紧跟引号内容，再匹配 "description" 后的引号内容（非贪婪、跨行）
+              const regex = /"name"\s*[:：]\s*"([^"]*)"\s*[,，]?\s*"description"\s*[:：]\s*"([\s\S]*?)"/g;
+              let match: RegExpExecArray | null;
+              while ((match = regex.exec(text)) !== null) {
+                const name = match[1].trim();
+                const desc = match[2].trim();
+                if (name && desc) {
+                  items.push({ name, description: desc });
+                }
+              }
+              if (items.length > 0) return items;
+            } catch {}
+            
             return [];
           };
           

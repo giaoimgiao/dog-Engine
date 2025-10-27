@@ -74,6 +74,8 @@ interface ProviderFormData {
     defaultTopK?: number;
     enableDynamicThinking?: boolean;
     thinkingBudget?: number;
+    requestTimeoutMs?: number;
+    retries?: number;
 }
 
 function ProviderForm({ 
@@ -101,6 +103,8 @@ function ProviderForm({
         defaultTopK: provider?.advancedConfig?.defaultTopK,
         enableDynamicThinking: provider?.advancedConfig?.enableDynamicThinking ?? false,
         thinkingBudget: provider?.advancedConfig?.thinkingBudget,
+        requestTimeoutMs: provider?.advancedConfig?.requestTimeoutMs,
+        retries: provider?.advancedConfig?.retries,
     });
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -310,6 +314,46 @@ function ProviderForm({
                     />
                 </div>
 
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                        <Label htmlFor="requestTimeoutMs">请求超时（毫秒）</Label>
+                        <Input
+                            id="requestTimeoutMs"
+                            type="number"
+                            min="5000"
+                            step="1000"
+                            value={formData.requestTimeoutMs || ''}
+                            onChange={(e) => setFormData(prev => ({
+                                ...prev,
+                                requestTimeoutMs: e.target.value ? parseInt(e.target.value) : undefined
+                            }))}
+                            placeholder="默认：30000"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            SSE流式输出超时时间，慢速模型建议设为60000-120000（1-2分钟）
+                        </p>
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="retries">重试次数 (0-3)</Label>
+                        <Input
+                            id="retries"
+                            type="number"
+                            min="0"
+                            max="3"
+                            step="1"
+                            value={formData.retries !== undefined ? formData.retries : ''}
+                            onChange={(e) => setFormData(prev => ({
+                                ...prev,
+                                retries: e.target.value ? parseInt(e.target.value) : undefined
+                            }))}
+                            placeholder="默认：1"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            超时或5xx错误时的自动重试次数
+                        </p>
+                    </div>
+                </div>
+
                 {/* Gemini 2.5 系列特有设置 */}
                 {formData.type === 'gemini' && (
                     <div className="space-y-4 border-t pt-4">
@@ -436,6 +480,12 @@ export function AIProviderSettings({
                 if (formData.thinkingBudget !== undefined) {
                     advancedConfig.thinkingBudget = formData.thinkingBudget;
                 }
+            }
+            if (formData.requestTimeoutMs !== undefined) {
+                advancedConfig.requestTimeoutMs = formData.requestTimeoutMs;
+            }
+            if (formData.retries !== undefined) {
+                advancedConfig.retries = formData.retries;
             }
 
             const providerConfig: Omit<AIProviderConfig, 'createdAt' | 'updatedAt'> = {
