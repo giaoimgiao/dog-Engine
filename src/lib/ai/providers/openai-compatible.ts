@@ -158,6 +158,13 @@ export class OpenAICompatibleProvider implements AIProvider {
         throw await this.handleHttpError(response);
       }
 
+      // 兼容部分聚合/自托管端点直接返回 text/plain
+      const contentType = response.headers.get('content-type') || '';
+      if (!/json/i.test(contentType)) {
+        const text = await response.text();
+        return text || '';
+      }
+
       const data: OpenAIResponse = await response.json();
       
       if (!data.choices || data.choices.length === 0) {
@@ -261,7 +268,10 @@ export class OpenAICompatibleProvider implements AIProvider {
                 yield content;
               }
             } catch (e) {
-              // 忽略解析错误的行
+              // 若不是合法JSON，部分实现会直接以 data: 纯文本 推送
+              if (data && data !== '[DONE]') {
+                yield data;
+              }
               continue;
             }
           }
