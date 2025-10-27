@@ -56,6 +56,8 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
   const [fetchDialogChapter, setFetchDialogChapter] = useState<Chapter | null>(null);
   const [isFetching, setIsFetching] = useState(false);
   const [isAiRewriting, setIsAiRewriting] = useState(false);
+  // 全局仿写进行中（防重复触发）
+  const [activeRewriteChapterId, setActiveRewriteChapterId] = useState<string | null>(null);
   
   // AI rewrite settings
   const DEFAULT_REWRITE_PERSONA = `你是一个专业的网络小说仿写助手。请根据原文内容，保持故事情节和人物设定不变，但用不同的表达方式重新创作，使文字更加生动有趣。`;
@@ -169,6 +171,10 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
   // Fetch original content and copy directly to editor
   const handleDirectCopy = async () => {
     if (!fetchDialogChapter || !book.sourceId || !fetchDialogChapter.url) return;
+    if (activeRewriteChapterId) {
+      toast({ title: '正在AI仿写', description: '请等待当前仿写完成后再进行其他操作', variant: 'destructive' });
+      return;
+    }
     
     setIsFetching(true);
     try {
@@ -198,6 +204,10 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
   // Fetch original content and AI rewrite
   const handleAiRewrite = async () => {
     if (!fetchDialogChapter || !book.sourceId || !fetchDialogChapter.url) return;
+    if (activeRewriteChapterId) {
+      toast({ title: '已有仿写任务进行中', description: '请等待当前AI仿写完成', variant: 'destructive' });
+      return;
+    }
     
     if (!canGenerate) {
       toast({
@@ -210,6 +220,10 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
 
     setIsFetching(true);
     setIsAiRewriting(true);
+    setActiveRewriteChapterId(fetchDialogChapter.id);
+    // 自动关闭弹窗，避免用户重复点击导致并发请求
+    setFetchDialogChapter(null);
+    toast({ title: 'AI仿写已开始', description: '窗口已自动关闭，可在编辑器内实时查看进度', duration: 2000 });
     
     try {
       // 1. Fetch original content
@@ -240,12 +254,13 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
       setActiveChapter((book.chapters.find(c => c.id === fetchDialogChapter.id)) || null);
       
       toast({ title: '成功', description: 'AI仿写完成，内容已添加到编辑器' });
-      closeFetchDialog();
+      // 仿写结束，不自动再打开弹窗
     } catch (error: any) {
       toast({ title: 'AI仿写失败', description: error.message, variant: 'destructive' });
     } finally {
       setIsFetching(false);
       setIsAiRewriting(false);
+      setActiveRewriteChapterId(null);
     }
   }
 
@@ -385,7 +400,7 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <Button 
                                 onClick={handleDirectCopy} 
-                                disabled={isFetching}
+                                disabled={isFetching || !!activeRewriteChapterId}
                                 className="h-16 flex-col gap-2"
                                 variant="outline"
                             >
@@ -398,7 +413,7 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
                             </Button>
                             <Button
                                 onClick={handleAiRewrite}
-                                disabled={isFetching || !canGenerate}
+                                disabled={isFetching || !!activeRewriteChapterId || !canGenerate}
                                 className="h-16 flex-col gap-2"
                                 variant="outline"
                             >
