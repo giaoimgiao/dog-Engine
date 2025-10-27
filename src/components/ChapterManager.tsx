@@ -76,7 +76,7 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
   
   // 使用统一AI配置和调用
   const { selectedProviderId, selectedModelId, setSelectedProvider, setSelectedModel } = useAIConfig();
-  const { generateContent: aiGenerateContent, canGenerate } = useAI();
+  const { generateContent: aiGenerateContent, generateContentStream: aiGenerateContentStream, canGenerate } = useAI();
   
   const [maxTokens, setMaxTokens] = useState<number>(() => {
     if (typeof window === 'undefined') return 4096;
@@ -218,22 +218,26 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
       const data = await res.json();
       if (!data?.success) throw new Error(data.error || '获取章节内容失败');
       
-      // 2. AI rewrite
+      // 2. AI rewrite（改为流式输出，边到边写，避免长文本超时/截断）
       const prompt = `${rewritePrompt}\n\n原文内容：\n${data.chapter.content}`;
-      const result = await aiGenerateContent(prompt, {
-        temperature: 0.7,
+      let rewritten = '';
+      const stream = aiGenerateContentStream(prompt, {
+        temperature: 0.9,
         maxOutputTokens: maxTokens,
         systemInstruction: rewritePersona,
       });
-      
-      const updatedChapters = book.chapters.map(c =>
-        c.id === fetchDialogChapter.id
-          ? { ...c, content: result, title: fetchDialogChapter.title || data.chapter.title }
-          : c
-      );
-      const updatedBook = { ...book, chapters: updatedChapters };
-      updateBook(updatedBook);
-      setActiveChapter(updatedChapters.find(c => c.id === fetchDialogChapter.id) || null);
+
+      for await (const chunk of stream) {
+        rewritten += chunk;
+        const updating = book.chapters.map(c =>
+          c.id === fetchDialogChapter.id
+            ? { ...c, content: rewritten, title: fetchDialogChapter.title || data.chapter.title }
+            : c
+        );
+        updateBook({ ...book, chapters: updating });
+      }
+
+      setActiveChapter((book.chapters.find(c => c.id === fetchDialogChapter.id)) || null);
       
       toast({ title: '成功', description: 'AI仿写完成，内容已添加到编辑器' });
       closeFetchDialog();
