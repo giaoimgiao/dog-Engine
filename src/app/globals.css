@@ -28,6 +28,19 @@ body {
     --input: 53 78% 87%;
     --ring: 28 29% 56%;
     --radius: 0.5rem;
+
+    /* Editor theme tokens (defaults) */
+    --editor-bg: transparent;
+    --editor-fg: inherit;
+    --editor-accent: hsl(var(--accent));
+    --editor-font-family: inherit;
+    --editor-font-size: 1rem;
+    --editor-line-height: 1.8;
+    --editor-paragraph-spacing: 0;
+    --editor-padding: 1rem;
+    --editor-caret-color: currentColor;
+    --editor-selection-bg: rgba(124, 58, 237, 0.2);
+    --editor-selection-fg: inherit;
   }
   .dark {
     --background: 25 34% 10%;

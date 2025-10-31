@@ -66,8 +66,8 @@ function BookCard({ book }: { book: BookstoreBook }) {
       <Link href={`/bookstore/book?url=${encodeURIComponent(book.detailUrl)}&sourceId=${book.sourceId}`} passHref className="flex flex-col flex-grow">
         <CardContent className="p-0">
             <div className="relative aspect-[3/4] w-full">
-              <Image
-                src={book.cover || `https://placehold.co/300x400.png`}
+            <Image
+              src={book.cover ? `/api/proxy-image?url=${encodeURIComponent(book.cover)}` : `https://placehold.co/300x400.png`}
                 alt={book.title}
                 fill
                 className="object-cover rounded-t-lg"
@@ -136,6 +136,7 @@ export default function BookstorePage() {
     const router = useRouter();
     const [hotBooks, setHotBooks] = useState<BookstoreBook[]>([]);
     const [categories, setCategories] = useState<BookstoreCategory[]>([]);
+    const [hotFromCategoryTitle, setHotFromCategoryTitle] = useState<string>('');
     const [isLoading, setIsLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -207,6 +208,21 @@ export default function BookstorePage() {
                             setHotBooks(data.books.slice(0, 12));
                         } else if (data.categories) {
                             setCategories(data.categories);
+                            // 新策略：热门推荐优先从分类中随机抽取一个分类并加载其书目
+                            const candidates: BookstoreCategory[] = (data.categories as BookstoreCategory[]).filter((c: BookstoreCategory) => !!c.url);
+                            if (candidates.length > 0) {
+                                const picked = candidates[Math.floor(Math.random() * candidates.length)];
+                                try {
+                                    const booksRes = await fetch(`/api/bookstore/category?sourceId=${selectedSourceId}&url=${encodeURIComponent(picked.url!)}`, { cache: 'no-store', next: { revalidate: 0 } });
+                                    if (booksRes.ok) {
+                                        const booksData = await booksRes.json();
+                                        if (booksData.success && Array.isArray(booksData.books) && booksData.books.length > 0) {
+                                            setHotBooks(booksData.books.slice(0, 12));
+                                            setHotFromCategoryTitle(picked.title || '热门推荐');
+                                        }
+                                    }
+                                } catch {}
+                            }
                         }
                     }
                 } else {
@@ -290,10 +306,10 @@ export default function BookstorePage() {
                                 <>
                                 <div className="flex items-center gap-2 mb-4">
                                     <Flame className="text-primary" />
-                                    <h2 className="text-2xl font-bold font-headline">热门推荐</h2>
+                                    <h2 className="text-2xl font-bold font-headline">{hotFromCategoryTitle || '热门推荐'}</h2>
                                 </div>
                                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                                    {hotBooks.map(book => <BookCard key={`${book.detailUrl}-${book.sourceId}`} book={book} />)}
+                                    {hotBooks.map((book, index) => <BookCard key={`${book.sourceId}-${book.detailUrl || ''}-${book.title || ''}-${index}`} book={book} />)}
                                 </div>
                                 </>
                              )}
