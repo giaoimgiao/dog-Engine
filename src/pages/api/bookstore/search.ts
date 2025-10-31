@@ -157,7 +157,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             intro: searchRule.intro,
         };
         const booksRaw = await parseListWithRules(responseText, searchRule.bookList, itemRules, searchUrl, source);
-        const books: BookstoreBook[] = booksRaw.map(book => ({...book, sourceId}));
+        const books: BookstoreBook[] = booksRaw.map((book) => {
+            const b: any = { ...book };
+            const raw = b.__raw || {};
+
+            // 书名兜底：优先规则结果，其次 raw 数据常见字段
+            b.title = b.title || raw.title || raw.name || raw.book_name || raw.bookName || raw.bookname || '';
+            // 作者兜底
+            b.author = b.author || raw.author || raw.writer || raw.author_name || '';
+            // 简介/分类等附加字段也尝试保留
+            b.category = b.category || raw.category || raw.tags || '';
+            b.latestChapter = b.latestChapter || raw.last_chapter_title || raw.lastChapter || '';
+
+            delete b.__raw; // 避免把原始数据回传到前端
+            return { ...(b as BookstoreBook), sourceId };
+        });
      
         console.log(`${logPrefix} Found ${books.length} books initially.`);
         

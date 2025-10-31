@@ -7,6 +7,7 @@ export interface Chapter {
   title: string;
   content: string;
   url?: string; // For bookstore chapters
+  summary?: string; // AI-generated chapter summary
 }
 
 export interface Book {

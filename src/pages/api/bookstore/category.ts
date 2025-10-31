@@ -56,8 +56,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             fetchUrlOrJsonData = (exploreUrl || url) as string;
         }
 
-        let data;
-        let baseUrl = source.url;
+        let data: string = '';
+        let baseUrl: string = source.url || '';
 
         // If the result is a URL, fetch it. If not, it's probably already JSON data.
         if (fetchUrlOrJsonData.startsWith('http')) {
@@ -244,7 +244,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
             
             // 强兼容HTML数据处理
-            let processedData = data;
+            let processedData: string = data;
             if (data.trim().startsWith('<')) {
                 console.log(`${logPrefix} 检测到HTML格式数据，进行强兼容处理`);
                 
@@ -352,16 +352,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                         try {
                             console.log(`${logPrefix} 尝试使用模式: ${pattern}`);
                             const testResult = await parseListWithRules(processedData, pattern, {
-                                title: findRule.name || 'text',
-                                author: findRule.author || 'text',
-                                cover: findRule.coverUrl || 'img@src',
-                                detailUrl: findRule.bookUrl || 'a@href',
-                                category: findRule.kind || 'text',
-                                latestChapter: findRule.lastChapter || 'text',
+                                title: findRule.name || 'a@text||td@text||.title@text||h3@text||h2@text',
+                                author: findRule.author || '.author@text||td@text',
+                                cover: findRule.coverUrl || 'img@src||img@data-original',
+                                detailUrl: findRule.bookUrl || 'a@href||td a@href',
+                                category: findRule.kind || '.category@text||td@text',
+                                latestChapter: findRule.lastChapter || '.chapter@text||td@text',
                             }, baseUrl);
                             
                             if (testResult.length > 0) {
                                 console.log(`${logPrefix} ✅ 使用模式 ${pattern} 成功解析到 ${testResult.length} 本书`);
+                                console.log(`${logPrefix} 样本数据（前2本）:`, JSON.stringify(testResult.slice(0, 2), null, 2));
                                 booksRaw = testResult;
                                 break;
                             }
@@ -378,7 +379,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 // 备用解析：尝试提取所有链接作为书籍
                 try {
                     booksRaw = (await parseListWithRules(processedData, 'a', {
-                        title: 'text',
+                        title: '@text',
                         detailUrl: '@href'
                     }, baseUrl)).filter(book => book.title && book.title.length > 2);
                     console.log(`${logPrefix} 备用解析得到 ${booksRaw.length} 个链接`);

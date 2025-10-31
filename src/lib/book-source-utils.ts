@@ -1,4 +1,3 @@
-
 import type { BookSource } from './types';
 import { VM } from 'vm2';
 import * as cheerio from 'cheerio';
@@ -83,7 +82,7 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
         _open_argument: (source as any)?.variable || JSON.stringify(defaultConfig),
         ...(sharedVariables || {})  // 合并共享变量
     };
-    
+
     // console.log(`[createSandbox] 初始化变量:`, variableMap._open_argument);
     
     const sandbox = {
@@ -446,7 +445,7 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
                     return cookie || '';
                 } catch (e: any) {
                     console.error(`[Mock] java.getCookie error:`, e.message);
-                    return '';
+                return '';
                 }
             },
             startBrowser: (url: string, title: string) => {
@@ -462,7 +461,7 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
         eval: (code: any) => {
             try {
                 const str = typeof code === 'string' ? code : String(code ?? '');
-                // 判定为“很可能是正文/HTML/长文本”
+                // 判定为"很可能是正文/HTML/长文本"
                 const hasHtml = /<[^>]+>/.test(str);
                 const nonAsciiRatio = (() => {
                     const len = str.length || 1; let nonAscii = 0; for (let i = 0; i < Math.min(len, 2000); i++) { if (str.charCodeAt(i) > 127) nonAscii++; }
@@ -485,6 +484,25 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
                 return code;
             }
         },
+        localStorage: {
+            _storage: new Map<string, string>(),
+            getItem: function(key: string) {
+                // console.log(`[Mock] localStorage.getItem: ${key}`);
+                return this._storage.get(key) || null;
+            },
+            setItem: function(key: string, value: string) {
+                // console.log(`[Mock] localStorage.setItem: ${key} = ${value}`);
+                this._storage.set(key, String(value));
+            },
+            removeItem: function(key: string) {
+                // console.log(`[Mock] localStorage.removeItem: ${key}`);
+                this._storage.delete(key);
+            },
+            clear: function() {
+                // console.log(`[Mock] localStorage.clear`);
+                this._storage.clear();
+            }
+        },
         cookie: {
             getCookie: (url: string) => {
                 try {
@@ -494,7 +512,7 @@ const createSandbox = (source: BookSource | undefined, key?: string, page?: numb
                     return cookie || '';
                 } catch (e: any) {
                     console.error(`[Mock] cookie.getCookie error:`, e.message);
-                    return '';
+                return '';
                 }
             }
         },
@@ -821,7 +839,7 @@ export async function evaluateJs(script: string, context: { key?: string, page?:
                             result = String(value);
                             console.log(`[evaluateJs] 应用规则${afterJs}后，结果长度: ${result.length}`);
                         }
-                    } catch (e: any) {
+        } catch (e: any) {
                         console.warn(`[evaluateJs] 无法解析JS结果或应用规则${afterJs}:`, e.message);
                     }
                 }
@@ -889,7 +907,7 @@ export async function evaluateJs(script: string, context: { key?: string, page?:
 
 
 /**
- * 运行一段 JS 片段作为“变换器”。
+ * 运行一段 JS 片段作为"变换器"。
  * 将入参作为 result 注入，执行 snippet 后返回 result 字符串。
  */
 export async function runJsTransformer(snippet: string, context: { key?: string, page?: number, source?: BookSource, result?: any, baseUrl?: string }): Promise<string> {
@@ -1330,6 +1348,7 @@ export async function parseListWithRules(data: string, listRule: string | undefi
                                         resultItem[key] = await parseWithRules(item, rule, baseUrl, source);
                                     }
                                 }
+                                resultItem.__raw = item;
                                 results.push(resultItem);
                             }
                             return results;
@@ -1414,7 +1433,8 @@ export async function parseListWithRules(data: string, listRule: string | undefi
                 if (index < 3) {
                   //console.log(`[parseListWithRules] 第 ${index + 1} 条记录解析结果:`, JSON.stringify(resultItem, null, 2).substring(0, 200));
                 }
-                results.push(resultItem);
+                            resultItem.__raw = item;
+                            results.push(resultItem);
             }
             return results;
         }
@@ -1483,7 +1503,9 @@ export async function parseListWithRules(data: string, listRule: string | undefi
             if (index < 3) {
               //console.log(`[parseListWithRules] 第 ${index + 1} 条记录解析结果:`, JSON.stringify(resultItem, null, 2).substring(0, 200));
             }
-            results.push(resultItem);
+            resultItem.__raw = item;
+                resultItem.__raw = item;
+                results.push(resultItem);
         }
         return results;
 
@@ -1504,6 +1526,7 @@ export async function parseListWithRules(data: string, listRule: string | undefi
             if (index < 3) {
               //console.log(`[parseListWithRules] 第 ${index + 1} 个元素解析结果:`, JSON.stringify(item, null, 2).substring(0, 200));
             }
+            item.__raw = { _html: elementHtml };
             results.push(item);
         }
         return results;
