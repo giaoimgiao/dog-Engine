@@ -20,7 +20,7 @@ export default function Header({ children }: HeaderProps) {
   const isWritingPage = pathname?.startsWith('/books/');
 
   return (
-    <header className="sticky top-0 z-40 w-full border-b bg-background/80 backdrop-blur-sm">
+    <header data-theme-scope="topbar" className="sticky top-0 z-40 w-full border-b bg-background/80 backdrop-blur-sm">
       <div className="container mx-auto flex h-14 sm:h-16 items-center justify-between px-2 sm:px-4">
         <div className="flex items-center gap-2 sm:gap-4">
             <Link href="/">

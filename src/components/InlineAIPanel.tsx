@@ -7,12 +7,18 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import ModelSelector from '@/components/ModelSelector';
 import { Switch } from '@/components/ui/switch';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Users } from 'lucide-react';
+import { getPrompts } from '@/lib/actions/community';
+import type { CommunityPrompt } from '@/lib/types';
 import { useAIConfig } from '@/hooks/useAIConfig';
 
 export interface InlineAIPanelValues {
   providerId?: string;
   modelId?: string;
   prompt?: string;
+  /** 自定义描写模式下可作为 systemInstruction 使用 */
+  systemPrompt?: string;
   useChapterContext?: boolean;
   useRoleCards?: boolean;
   useWorldBook?: boolean;
@@ -34,18 +40,38 @@ export default function InlineAIPanel(props: InlineAIPanelProps) {
   const { selectedProviderId, selectedModelId, setSelectedProvider, setSelectedModel } = useAIConfig();
 
   const [prompt, setPrompt] = useState<string>(defaultPrompt);
+  const isCustom = title.includes('自定义');
+  const [systemPrompt, setSystemPrompt] = useState<string>('');
   const [useChapterContext, setUseChapterContext] = useState<boolean>(true);
   const [useRoleCards, setUseRoleCards] = useState<boolean>(true);
   const [useWorldBook, setUseWorldBook] = useState<boolean>(false);
+  const [communityPrompts, setCommunityPrompts] = useState<CommunityPrompt[]>([]);
+  const [isCommunityLoading, setIsCommunityLoading] = useState(false);
 
   const values: InlineAIPanelValues = useMemo(() => ({
     providerId: selectedProviderId,
     modelId: selectedModelId,
     prompt,
+    systemPrompt,
     useChapterContext,
     useRoleCards,
     useWorldBook,
-  }), [selectedProviderId, selectedModelId, prompt, useChapterContext, useRoleCards, useWorldBook]);
+  }), [selectedProviderId, selectedModelId, prompt, systemPrompt, useChapterContext, useRoleCards, useWorldBook]);
+
+  // 加载社区提示词（仅在面板打开时触发一次）
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setIsCommunityLoading(true);
+        const list = await getPrompts();
+        if (!cancelled) setCommunityPrompts(list);
+      } catch {}
+      finally { if (!cancelled) setIsCommunityLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -67,8 +93,44 @@ export default function InlineAIPanel(props: InlineAIPanelProps) {
             />
           </div>
           <div className="space-y-2">
-            <Label>提示词</Label>
-            <Textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="为本次操作提供具体指令" />
+            <div className="flex items-center gap-2">
+              <Label>{isCustom ? '系统提示词' : '提示词'}</Label>
+              <Select
+                onValueChange={(id) => {
+                  const p = communityPrompts.find(x => x.id === id);
+                  if (p) {
+                    if (isCustom) setSystemPrompt(p.prompt);
+                    else setPrompt(p.prompt);
+                  }
+                }}
+                disabled={isCommunityLoading}
+              >
+                <SelectTrigger className="h-8 w-[160px] ml-auto">
+                  <SelectValue placeholder={<div className='flex items-center gap-2'><Users className="h-4 w-4"/> 社区提示词</div>} />
+                </SelectTrigger>
+                <SelectContent>
+                  {isCommunityLoading ? (
+                    <SelectItem value="loading" disabled>加载中...</SelectItem>
+                  ) : (
+                    communityPrompts.map(p => (
+                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            {!isCustom && (
+              <Textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="为本次操作提供具体指令" />
+            )}
+            {isCustom && (
+              <>
+                <Textarea rows={3} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} placeholder="用于指导模型的系统级提示词（可选）" />
+                <div className="space-y-1">
+                  <Label>补充指令</Label>
+                  <Textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="针对本次描写的细化要求（可选）" />
+                </div>
+              </>
+            )}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="flex items-center justify-between rounded-md border p-3">

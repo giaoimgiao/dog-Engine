@@ -32,6 +32,9 @@ import { saveChapterToFile, copyChapterToClipboard, saveBookToFile, copyBookToCl
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
 import InlineAIToolbar from './InlineAIToolbar';
 import InlineAIPanel, { type InlineAIPanelValues } from './InlineAIPanel';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
+import type { ThemePluginManifest } from '@/lib/theme-plugin';
+import { THEME_PLUGINS_KEY, THEME_SELECTED_ID_KEY, applyThemeTokensToElement, getTokensForScope } from '@/lib/theme-plugin';
 
 
 interface EditorProps {
@@ -61,6 +64,8 @@ export default function Editor({
 }: EditorProps) {
   const router = useRouter();
   const isMobile = useIsMobile();
+  const editorRootRef = useRef<HTMLDivElement | null>(null);
+  const actionbarRef = useRef<HTMLDivElement | null>(null);
   const [content, setContent] = useState(chapter.content);
   const [prompt, setPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -85,31 +90,16 @@ export default function Editor({
 
 
   const [contextChapterIds, setContextChapterIds] = useState<Set<string>>(new Set());
-  const [isCompressing, setIsCompressing] = useState(false);
-  const [compressedContext, setCompressedContext] = useState<string>('');
-  const [useCompressedContext, setUseCompressedContext] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true;
-    const v = localStorage.getItem('context-compress-use');
-    return v === null ? true : v === '1';
-  });
-  const DEFAULT_COMPRESS_PERSONA = `你是资深网文剧情分析师，擅长从大量文本中提取剧情主线与关键事件。`;
-  const DEFAULT_COMPRESS_PROMPT = `请将以下多章节内容压缩为「剧情重点事件清单」，要求：\n- 仅保留推动主线的关键事件与设定\n- 列表化输出，每条尽量不超过两句\n- 标注出涉及的主要角色与地点\n- 去除细节描写与重复信息\n- 若信息不完整，用(?)标记`;
-  const [compressPersona, setCompressPersona] = useState<string>(() => {
-    if (typeof window === 'undefined') return DEFAULT_COMPRESS_PERSONA;
-    return localStorage.getItem('context-compress-persona') || DEFAULT_COMPRESS_PERSONA;
-  });
-  const [compressPrompt, setCompressPrompt] = useState<string>(() => {
-    if (typeof window === 'undefined') return DEFAULT_COMPRESS_PROMPT;
-    return localStorage.getItem('context-compress-prompt') || DEFAULT_COMPRESS_PROMPT;
-  });
-  // 压缩模型使用当前选中的模型
-  const compressModel = selectedModelId;
-  const [compressMaxTokens, setCompressMaxTokens] = useState<number>(() => {
-    if (typeof window === 'undefined') return 2048;
-    const saved = localStorage.getItem('context-compress-max-tokens');
-    const n = saved ? parseInt(saved, 10) : 2048;
-    return Number.isFinite(n) && n >= 512 ? n : 2048;
-  });
+
+  // ===== 编辑器主题（插件） =====
+  const [installedThemes] = useLocalStorage<ThemePluginManifest[]>(THEME_PLUGINS_KEY, []);
+  const [selectedThemeId] = useLocalStorage<string | null>(THEME_SELECTED_ID_KEY, null);
+  useEffect(() => {
+    const theme = installedThemes.find(t => t.id === selectedThemeId) || null;
+    const cleanupEditor = editorRootRef.current ? applyThemeTokensToElement(editorRootRef.current, getTokensForScope(theme, 'editor')) : () => {};
+    const cleanupAction = actionbarRef.current ? applyThemeTokensToElement(actionbarRef.current, getTokensForScope(theme, 'actionbar')) : () => {};
+    return () => { cleanupEditor(); cleanupAction(); };
+  }, [installedThemes, selectedThemeId]);
 
   // 剧情建议 Dialog 状态
   const [isPlotDialogOpen, setIsPlotDialogOpen] = useState(false);
@@ -144,12 +134,17 @@ export default function Editor({
   }, [fullContext.book.chapters, chapter.id]);
   const nonSpaceLength = (text: string) => (text || '').replace(/\s+/g, '').length;
   const currentCount = useMemo(() => nonSpaceLength(content), [content]);
+  // 是否使用“章节总结”作为上下文来源
+  const [useSummaryContext, setUseSummaryContext] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('context-source') === 'summary';
+  });
   const selectedContextChars = useMemo(() => {
     return otherChapters
       .filter(c => contextChapterIds.has(c.id))
-      .reduce((sum, c) => sum + nonSpaceLength(c.content), 0);
-  }, [otherChapters, contextChapterIds]);
-  const reachCompressThreshold = selectedContextChars >= 50000; // 5万字
+      .reduce((sum, c) => sum + nonSpaceLength(useSummaryContext ? String((c as any).summary || '') : c.content), 0);
+  }, [otherChapters, contextChapterIds, useSummaryContext]);
+  
 
   // Floating action bar visibility when near bottom of page
   const [showFab, setShowFab] = useState(false);
@@ -535,11 +530,15 @@ export default function Editor({
     }
     setInlineLoading(true);
     try {
-      const sys = mode === 'expand'
+      let sys = mode === 'expand'
         ? '你是资深网文写作助手：请对给定片段进行扩写，保持人物设定、语气、叙事视角一致，细节更丰富但不改变既有情节。'
         : mode === 'rewrite'
         ? '你是资深网文改写助手：请在不改变意思的前提下，优化遣词造句与节奏，使之更有可读性和韵律。'
         : '你是描写强化助手：根据用户指令对选中文本做定向描写强化，注意与上下文一致。';
+      // 自定义描写允许来自面板的系统提示词覆盖
+      if (mode === 'custom' && panel?.systemPrompt && panel.systemPrompt.trim()) {
+        sys = panel.systemPrompt.trim();
+      }
 
       const customPrompt = panel?.prompt || (mode === 'custom' ? '' : '');
       const basePrompt = `${mode === 'expand' ? '扩写' : mode === 'rewrite' ? '改写' : '定向描写'}以下文本：\n${selected}`;
@@ -569,11 +568,21 @@ export default function Editor({
       const addedContext = contextParts.length ? `\n\n${contextParts.join('\n\n')}` : '';
       const fullPrompt = `${basePrompt}${addedContext}` + (customPrompt ? `\n\n补充指令：${customPrompt}` : '');
 
+      // 进度式改写：边流边替换选区，避免只显示开头
       let result = '';
-      for await (const chunk of aiGenerateContentStream(fullPrompt, { systemInstruction: sys, maxOutputTokens: 512 })) {
+      const before = (content || '').slice(0, start);
+      const after = (content || '').slice(end);
+      // 记录撤回备份一次
+      setInlineBackup(content);
+      for await (const chunk of aiGenerateContentStream(fullPrompt, { systemInstruction: sys, maxOutputTokens: maxTokens[0] })) {
         result += chunk;
+        const next = before + result + after;
+        setContent(next);
+        updateChapterContent(chapter.id, next);
       }
-      if (result.trim()) replaceSelection(result.trim());
+      if (result.trim()) {
+        setShowInlineBar(false);
+      }
     } catch (e: any) {
       toast({ title: 'AI处理失败', description: e?.message || '请稍后再试', variant: 'destructive' });
     } finally {
@@ -650,14 +659,16 @@ export default function Editor({
         .map(ws => `关键词: ${ws.keyword}\n设定: ${ws.description}`)
         .join('\n\n');
       
-      const rawContext = fullContext.book.chapters
-        .filter(c => contextChapterIds.has(c.id))
-        .map(c => `--- Begin Chapter: ${c.title} ---\n${c.content}\n--- End Chapter: ${c.title} ---`)
+      // Build context from selected chapters
+      const selectedChapters = fullContext.book.chapters.filter(c => contextChapterIds.has(c.id));
+      const rawContext = selectedChapters
+        .map(c => useSummaryContext
+          ? `【章节总结：${c.title}】\n${String((c as any).summary || '')}`
+          : `--- Begin Chapter: ${c.title} ---\n${c.content}\n--- End Chapter: ${c.title} ---`
+        )
         .join('\n\n');
 
-      const otherChaptersContext = (compressedContext && useCompressedContext)
-        ? `【压缩剧情要点】\n${compressedContext}`
-        : rawContext;
+      const otherChaptersContext = rawContext;
 
       const fullChapterContext = `${content}\n\n${otherChaptersContext}`;
 
@@ -715,42 +726,22 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
   const budgetValue = thinkingBudget[0];
   const budgetLabel = budgetValue === -1 ? '动态' : budgetValue === 0 ? '关闭' : budgetValue;
 
-  const handleCompress = async () => {
-    if (isCompressing) return;
-    if (!canGenerate) {
-      toast({ title: '请先配置AI提供商', description: '点击右上角 AI 设置进行配置', variant: 'destructive' });
-      return;
-    }
-    const contextToCompress = otherChapters
-      .filter(c => contextChapterIds.has(c.id))
-      .map(c => `【${c.title}】\n${c.content}`)
-      .join('\n\n');
-    if (!contextToCompress.trim()) {
-      toast({ title: '请选择上下文章节', variant: 'destructive' });
-      return;
-    }
-    setIsCompressing(true);
-    try {
-      const prompt = `${compressPrompt}\n\n=== 原文多章节内容 ===\n${contextToCompress}`;
-      const summary = await aiGenerateContent(prompt, {
-        temperature: 0.2,
-        maxOutputTokens: compressMaxTokens,
-        systemInstruction: compressPersona,
-      });
-      setCompressedContext(summary);
-      setUseCompressedContext(true);
-      if (typeof window !== 'undefined') localStorage.setItem('context-compress-use', '1');
-      toast({ title: '压缩完成', description: '已生成剧情要点，将在生成时优先使用。' });
-    } catch (e: any) {
-      toast({ title: '压缩失败', description: e.message || '请稍后重试', variant: 'destructive' });
-    } finally {
-      setIsCompressing(false);
-    }
-  };
+  // 已移除“剧情压缩”功能（原 handleCompress 已删除）
 
 
   return (
-    <div className="flex flex-col h-full bg-background relative">
+    <div
+      ref={editorRootRef as any}
+      data-theme-scope="editor"
+      className="flex flex-col h-full bg-background relative"
+      style={{
+        background: 'var(--editor-bg)',
+        color: 'var(--editor-fg)',
+        fontFamily: 'var(--editor-font-family)',
+        fontSize: 'var(--editor-font-size)',
+        lineHeight: 'var(--editor-line-height)'
+      }}
+    >
         <div className="px-2 py-2 sm:px-4 sm:py-3 border-b flex justify-between items-center gap-2">
             <h2 className="text-base sm:text-lg md:text-2xl font-bold font-headline truncate flex-1 min-w-0">{chapter.title}</h2>
             <div className='flex items-center gap-1 sm:gap-2 flex-shrink-0'>
@@ -798,7 +789,15 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
                 onKeyUp={handleSelectionCheck}
                 placeholder="在这里开始你的故事..."
                 className="w-full h-full text-sm sm:text-base resize-none border-0 focus:ring-0 focus-visible:ring-0 p-3 sm:p-4 md:p-6 bg-transparent"
-                style={{minHeight: isMobile ? 'calc(100vh - 120px)' : 'calc(100vh - 160px)'}}
+                style={{
+                  minHeight: isMobile ? 'calc(100vh - 120px)' : 'calc(100vh - 160px)',
+                  background: 'var(--editor-bg)',
+                  color: 'var(--editor-fg)',
+                  fontFamily: 'var(--editor-font-family)',
+                  fontSize: 'var(--editor-font-size)',
+                  lineHeight: 'var(--editor-line-height)',
+                  caretColor: 'var(--editor-caret-color)'
+                }}
             />
             {/* 内联 AI 工具栏 */}
             <div className="sticky bottom-3 right-3 flex justify-end px-3">
@@ -824,7 +823,7 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
         
         {/* 底部浮出操作条（接近页面底部时显示） */}
         {showFab && !isMobile && (
-          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-background/80 border rounded-full px-2 py-1 shadow-md">
+          <div ref={actionbarRef as any} data-theme-scope="actionbar" className="fixed bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-background/80 border rounded-full px-2 py-1 shadow-md">
             <Button size="sm" variant="ghost" className="h-8 px-3" onClick={() => setIsAiDialogOpen(true)}>
               <PenLine className="h-4 w-4 mr-1" /> 剧情续写
             </Button>
@@ -916,7 +915,32 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-xs">系统提示词</Label>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs">系统提示词</Label>
+                    <Select
+                      onValueChange={(id) => {
+                        const p = communityPrompts.find(x => x.id === id);
+                        if (p) {
+                          setPlotSystemPrompt(p.prompt);
+                          if (typeof window !== 'undefined') localStorage.setItem('plot-system-prompt', p.prompt);
+                        }
+                      }}
+                      disabled={isCommunityPromptsLoading}
+                    >
+                      <SelectTrigger className="h-7 w-[150px] ml-auto">
+                        <SelectValue placeholder={<div className='flex items-center gap-1'><Users className="h-3.5 w-3.5"/> 社区提示词</div>} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {isCommunityPromptsLoading ? (
+                          <SelectItem value="loading" disabled>加载中...</SelectItem>
+                        ) : (
+                          communityPrompts.map(p => (
+                            <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <Textarea className="text-sm" rows={2} value={plotSystemPrompt} onChange={(e) => { setPlotSystemPrompt(e.target.value); if (typeof window !== 'undefined') localStorage.setItem('plot-system-prompt', e.target.value); }} />
                   <Label className="text-xs">用户提示词</Label>
                   <Textarea className="text-sm" rows={4} value={plotUserPrompt} onChange={(e) => { setPlotUserPrompt(e.target.value); if (typeof window !== 'undefined') localStorage.setItem('plot-user-prompt', e.target.value); }} />
@@ -1265,78 +1289,17 @@ ${fullChapterContext ? `\n=== 当前章节内容 ===\n${fullChapterContext}\n` :
                                         </div>
                                     </ScrollArea>
                                     <div className="mt-3 space-y-2">
+                                    <div className="flex items-center justify-between">
+                                        <div className="text-xs text-muted-foreground">使用章节总结作为上下文</div>
+                                        <Switch checked={useSummaryContext} onCheckedChange={(v) => {
+                                            setUseSummaryContext(!!v);
+                                            if (typeof window !== 'undefined') localStorage.setItem('context-source', v ? 'summary' : 'full');
+                                        }} />
+                                    </div>
                                         <div className="text-xs text-muted-foreground">
                                             已选择上下文字数（不含空格）：<span className="font-medium">{selectedContextChars}</span>
                                         </div>
-                                        {reachCompressThreshold && (
-                                            <div className="rounded-md border p-3 space-y-2">
-                                                <div className="text-sm font-medium">AI 剧情压缩</div>
-                                                <div className="text-xs text-muted-foreground">选择章节达到10万字时，可以先压缩为剧情要点，生成时优先使用。</div>
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                    <div className="space-y-2">
-                                                        <Label>压缩使用模型</Label>
-                                                        <div className="text-sm text-muted-foreground">
-                                                            使用当前选中的模型: {selectedModelId || '未选择'}
-                                                        </div>
-                                                    </div>
-                                                    <div className="space-y-2">
-                                                        <Label>压缩最大输出</Label>
-                                                        <Select value={String(compressMaxTokens)} onValueChange={(v) => {
-                                                            const n = parseInt(v, 10);
-                                                            setCompressMaxTokens(n);
-                                                            if (typeof window !== 'undefined') localStorage.setItem('context-compress-max-tokens', String(n));
-                                                        }}>
-                                                            <SelectTrigger>
-                                                                <SelectValue placeholder="选择最大输出长度" />
-                                                            </SelectTrigger>
-                                                            <SelectContent>
-                                                                {[1024, 1536, 2048, 3072, 4096].map(n => (
-                                                                    <SelectItem key={n} value={String(n)}>{n}</SelectItem>
-                                                                ))}
-                                                            </SelectContent>
-                                                        </Select>
-                                                    </div>
-                                                </div>
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                    <div className="space-y-2">
-                                                        <Label>压缩人设</Label>
-                                                        <Textarea rows={3} value={compressPersona} onChange={(e) => {
-                                                            setCompressPersona(e.target.value);
-                                                            if (typeof window !== 'undefined') localStorage.setItem('context-compress-persona', e.target.value);
-                                                        }} />
-                                                    </div>
-                                                    <div className="space-y-2">
-                                                        <Label>压缩提示</Label>
-                                                        <Textarea rows={3} value={compressPrompt} onChange={(e) => {
-                                                            setCompressPrompt(e.target.value);
-                                                            if (typeof window !== 'undefined') localStorage.setItem('context-compress-prompt', e.target.value);
-                                                        }} />
-                                                    </div>
-                                                </div>
-                                                <div className="flex items-center justify-between">
-                                                    <div className="text-xs text-muted-foreground">生成时优先使用压缩结果</div>
-                                                    <Switch checked={useCompressedContext} onCheckedChange={(v) => {
-                                                        setUseCompressedContext(!!v);
-                                                        if (typeof window !== 'undefined') localStorage.setItem('context-compress-use', v ? '1' : '0');
-                                                    }} />
-                                                </div>
-                                                <div className="flex gap-2">
-                                                    <Button size="sm" variant="secondary" onClick={() => setCompressedContext('')} disabled={isCompressing}>清空压缩结果</Button>
-                                                    <Button size="sm" onClick={handleCompress} disabled={isCompressing}>
-                                                        {isCompressing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                                        生成压缩要点
-                                                    </Button>
-                                                </div>
-                                                {compressedContext && (
-                                                    <div className="pt-2">
-                                                        <Label>压缩结果预览</Label>
-                                                        <ScrollArea className="h-32 w-full rounded-md border p-2">
-                                                            <p className="text-xs whitespace-pre-wrap text-foreground/80">{compressedContext}</p>
-                                                        </ScrollArea>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
+                                        {/* 已移除“AI 剧情压缩”功能 */}
                                     </div>
                                 </AccordionContent>
                             </AccordionItem>

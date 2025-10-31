@@ -2,7 +2,7 @@
 
 import type { Book, Chapter, CommunityPrompt } from '@/lib/types';
 import { Button } from './ui/button';
-import { Plus, Trash2, FileText, Edit, Download, Copy, Bot, Users, Loader2, WandSparkles } from 'lucide-react';
+import { Plus, Trash2, FileText, Edit, Download, Copy, Bot, Users, Loader2, WandSparkles, Sparkles } from 'lucide-react';
 import { cn, generateUUID } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
 import {
@@ -38,6 +38,8 @@ import { AIProviderSettings } from './AIProviderSettings';
 import ModelSelector from './ModelSelector';
 import { useAI } from '@/hooks/useAI';
 import { useAIConfig } from '@/hooks/useAIConfig';
+import PlotSummaryManager from './PlotSummaryManager';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 
 interface ChapterManagerProps {
   book: Book;
@@ -90,6 +92,12 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
   // Community prompts
   const [communityPrompts, setCommunityPrompts] = useState<CommunityPrompt[]>([]);
   const [isCommunityPromptsLoading, setIsCommunityPromptsLoading] = useState(false);
+  
+  // Plot summary dialog
+  const [plotSummaryDialogOpen, setPlotSummaryDialogOpen] = useState(false);
+  
+  // View chapter summary dialog
+  const [viewSummaryChapter, setViewSummaryChapter] = useState<Chapter | null>(null);
 
   // Load community prompts when fetch dialog opens
   useEffect(() => {
@@ -159,6 +167,10 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
   // Open fetch dialog instead of directly fetching
   const openFetchDialog = (chapter: Chapter, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (activeRewriteChapterId) {
+      toast({ title: 'AI仿写进行中', description: '当前已有仿写任务，请稍后再打开', variant: 'destructive' });
+      return;
+    }
     setFetchDialogChapter(chapter);
   }
 
@@ -218,12 +230,12 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
       return;
     }
 
+    // 先立即关闭弹窗，阻止用户在网络请求开始前重复点击
+    setFetchDialogChapter(null);
     setIsFetching(true);
     setIsAiRewriting(true);
     setActiveRewriteChapterId(fetchDialogChapter.id);
-    // 自动关闭弹窗，避免用户重复点击导致并发请求
-    setFetchDialogChapter(null);
-    toast({ title: 'AI仿写已开始', description: '窗口已自动关闭，可在编辑器内实时查看进度', duration: 2000 });
+    toast({ title: 'AI仿写已开始', description: '内容将实时写入编辑器，请稍候', duration: 2000 });
     
     try {
       // 1. Fetch original content
@@ -288,10 +300,19 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
 
   return (
     <div className="flex flex-col h-full">
-        <div className="p-2 flex-shrink-0">
+        <div className="p-2 flex-shrink-0 space-y-2">
             <Button onClick={handleAddChapter} className="w-full" size={isMobile ? "sm" : "default"}>
                 <Plus className="mr-2 h-4 w-4" />
                 新建章节
+            </Button>
+            <Button 
+              onClick={() => setPlotSummaryDialogOpen(true)} 
+              className="w-full" 
+              variant="outline"
+              size={isMobile ? "sm" : "default"}
+            >
+                <Sparkles className="mr-2 h-4 w-4" />
+                剧情总结
             </Button>
         </div>
         <div className="flex-grow overflow-y-auto">
@@ -317,6 +338,23 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
                           "flex items-center flex-shrink-0",
                           isMobile ? "opacity-100" : "opacity-0 group-hover:opacity-100 transition-opacity"
                         )}>
+                           {chapter.summary && (
+                             <TooltipProvider>
+                               <Tooltip>
+                                 <TooltipTrigger asChild>
+                                   <Button 
+                                     variant="ghost" 
+                                     size="icon" 
+                                     className={cn(isMobile ? "h-8 w-8" : "h-6 w-6", "text-primary")} 
+                                     onClick={(e) => { e.stopPropagation(); setViewSummaryChapter(chapter); }}
+                                   >
+                                      <FileText className="h-3.5 w-3.5" />
+                                    </Button>
+                                 </TooltipTrigger>
+                                 <TooltipContent>查看剧情总结</TooltipContent>
+                               </Tooltip>
+                             </TooltipProvider>
+                           )}
                            {chapter.url && book.sourceId && (
                              <Button variant="ghost" size="icon" className={isMobile ? "h-8 w-8" : "h-6 w-6"} onClick={(e) => openFetchDialog(chapter, e)} title="抓取章节内容">
                                 <Download className="h-3.5 w-3.5" />
@@ -531,6 +569,39 @@ export default function ChapterManager({ book, updateBook, activeChapter, setAct
                     </DialogClose>
                 </DialogFooter>
             </DialogContent>
+        </Dialog>
+
+        {/* Plot Summary Manager Dialog */}
+        <PlotSummaryManager 
+          book={book} 
+          updateBook={updateBook} 
+          open={plotSummaryDialogOpen} 
+          onOpenChange={setPlotSummaryDialogOpen} 
+        />
+
+        {/* View Chapter Summary Dialog */}
+        <Dialog open={!!viewSummaryChapter} onOpenChange={(open) => !open && setViewSummaryChapter(null)}>
+          <DialogContent className={isMobile ? "w-[90vw]" : "max-w-2xl"}>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5 text-primary" />
+                章节剧情总结
+              </DialogTitle>
+              <DialogDescription>
+                {viewSummaryChapter && `第${book.chapters.findIndex(c => c.id === viewSummaryChapter.id) + 1}章：${viewSummaryChapter.title}`}
+              </DialogDescription>
+            </DialogHeader>
+            <ScrollArea className="max-h-[60vh] pr-4">
+              <div className="p-4 bg-muted/50 rounded-md text-sm whitespace-pre-wrap">
+                {viewSummaryChapter?.summary || '暂无总结'}
+              </div>
+            </ScrollArea>
+            <DialogFooter>
+              <Button variant="secondary" onClick={() => setViewSummaryChapter(null)}>
+                关闭
+              </Button>
+            </DialogFooter>
+          </DialogContent>
         </Dialog>
     </div>
   );
