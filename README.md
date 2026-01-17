@@ -1,8 +1,6 @@
-# 🚀 Dog写作引擎 - 新一代AI小说创作平台
 
-<div align="center">
 
-**一款集「AI创作」「在线阅读」「智能分析」于一体的全栈网文创作引擎**
+
 
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?style=flat-square&logo=next.js)](https://nextjs.org/)
 [![React](https://img.shields.io/badge/React-18-blue?style=flat-square&logo=react)](https://reactjs.org/)
